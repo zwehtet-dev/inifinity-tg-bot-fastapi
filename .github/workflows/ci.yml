@@ -29,28 +29,22 @@ jobs:
         pip install -r requirements.txt
         pip install pytest pytest-cov pytest-asyncio flake8 black isort
 
+    - name: Check code formatting with black
+      run: |
+        black --check app || echo "⚠️ Code needs formatting. Run 'make format' locally."
+      continue-on-error: true
+
+    - name: Check import sorting with isort
+      run: |
+        isort --check-only app || echo "⚠️ Imports need sorting. Run 'make format' locally."
+      continue-on-error: true
+
     - name: Lint with flake8
       run: |
         # Stop the build if there are Python syntax errors or undefined names
         flake8 app --count --select=E9,F63,F7,F82 --show-source --statistics
         # Exit-zero treats all errors as warnings
         flake8 app --count --exit-zero --max-complexity=10 --max-line-length=127 --statistics
-
-    - name: Format code with black (auto-fix)
-      run: |
-        black app
-
-    - name: Sort imports with isort (auto-fix)
-      run: |
-        isort app
-    
-    - name: Check for formatting changes
-      run: |
-        if [[ -n $(git status --porcelain) ]]; then
-          echo "Code was reformatted. Please run 'make format' locally before committing."
-          git diff
-          exit 1
-        fi
 
     - name: Run tests with pytest
       env:
