@@ -45,7 +45,6 @@ jobs:
 
     - name: Build Docker image
       run: |
-        cd inifinity-tg-bot-fastapi
         docker build -t fastapi-bot:scan .
 
     - name: Run Trivy vulnerability scanner

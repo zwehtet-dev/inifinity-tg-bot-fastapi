@@ -39,8 +39,8 @@ jobs:
     - name: Build and push Docker image
       uses: docker/build-push-action@v5
       with:
-        context: ./inifinity-tg-bot-fastapi
-        file: ./inifinity-tg-bot-fastapi/Dockerfile
+        context: .
+        file: ./Dockerfile
         push: true
         tags: |
           ghcr.io/${{ github.repository }}/fastapi-bot:latest

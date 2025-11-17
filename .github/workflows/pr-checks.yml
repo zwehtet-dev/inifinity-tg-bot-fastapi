@@ -36,7 +36,6 @@ jobs:
 
     - name: Check Docker image size
       run: |
-        cd inifinity-tg-bot-fastapi
         docker build -t fastapi-bot:pr .
         SIZE=$(docker images fastapi-bot:pr --format "{{.Size}}")
         echo "Docker image size: $SIZE"
