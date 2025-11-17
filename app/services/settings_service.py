@@ -281,7 +281,6 @@ class SettingsService:
                 "on": on,
             }
             for bank_name, (
-                _,
                 account_number,
                 account_name,
                 qr_image,
@@ -307,7 +306,6 @@ class SettingsService:
                 "on": on,
             }
             for bank_name, (
-                _,
                 account_number,
                 account_name,
                 qr_image,
@@ -332,12 +330,14 @@ class SettingsService:
         banks = self._myanmar_banks if bank_type == "myanmar" else self._thai_banks
 
         if bank_name in banks:
-            _, account_number, account_name, qr_image = banks[bank_name]
+            account_number, account_name, qr_image, bank_id, on = banks[bank_name]
             return {
                 "bank_name": bank_name,
                 "account_number": account_number,
                 "account_name": account_name,
                 "qr_image": qr_image,
+                "id": bank_id,
+                "on": on,
             }
 
         return None
