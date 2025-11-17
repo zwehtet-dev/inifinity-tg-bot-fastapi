@@ -1,0 +1,72 @@
+name: PR Checks
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+jobs:
+  pr-validation:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+
+    - name: Check PR title
+      uses: amannn/action-semantic-pull-request@v5
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Check for merge conflicts
+      run: |
+        git fetch origin ${{ github.base_ref }}
+        if git merge-tree $(git merge-base HEAD origin/${{ github.base_ref }}) HEAD origin/${{ github.base_ref }} | grep -q '<<<<<<<'; then
+          echo "Merge conflicts detected"
+          exit 1
+        fi
+
+  size-check:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Check Docker image size
+      run: |
+        cd inifinity-tg-bot-fastapi
+        docker build -t fastapi-bot:pr .
+        SIZE=$(docker images fastapi-bot:pr --format "{{.Size}}")
+        echo "Docker image size: $SIZE"
+        
+        # Optional: Fail if image is too large (e.g., > 1GB)
+        SIZE_MB=$(docker images fastapi-bot:pr --format "{{.Size}}" | sed 's/MB//' | sed 's/GB/*1024/' | bc 2>/dev/null || echo "0")
+        echo "Image size in MB: $SIZE_MB"
+
+  code-quality:
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.12'
+
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install pylint mypy
+
+    - name: Run pylint
+      run: |
+        pip install -r requirements.txt
+        pylint app --exit-zero --output-format=text
+
+    - name: Run mypy type checking
+      run: |
+        mypy app --ignore-missing-imports --no-strict-optional || true

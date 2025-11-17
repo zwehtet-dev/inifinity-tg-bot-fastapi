@@ -1,0 +1,58 @@
+version: '3.8'
+
+services:
+  bot:
+    image: ghcr.io/${GITHUB_REPOSITORY}/fastapi-bot:latest
+    container_name: telegram-bot-fastapi
+    restart: always
+    ports:
+      - "8000:8000"
+    environment:
+      # Telegram Configuration
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
+      - TELEGRAM_WEBHOOK_SECRET=${TELEGRAM_WEBHOOK_SECRET}
+      - TELEGRAM_WEBHOOK_URL=${TELEGRAM_WEBHOOK_URL}
+      
+      # Backend Configuration
+      - BACKEND_API_URL=${BACKEND_API_URL}
+      - BACKEND_WEBHOOK_SECRET=${BACKEND_WEBHOOK_SECRET}
+      
+      # OpenAI Configuration
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      
+      # Admin Group Configuration
+      - ADMIN_GROUP_ID=${ADMIN_GROUP_ID}
+      - BUY_TOPIC_ID=${BUY_TOPIC_ID}
+      - SELL_TOPIC_ID=${SELL_TOPIC_ID}
+      - BALANCE_TOPIC_ID=${BALANCE_TOPIC_ID}
+      
+      # Application Configuration
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - ENVIRONMENT=production
+      - HOST=0.0.0.0
+      - PORT=8000
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    networks:
+      - bot-network
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "5"
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 1G
+        reservations:
+          cpus: '0.5'
+          memory: 512M
+
+networks:
+  bot-network:
+    driver: bridge

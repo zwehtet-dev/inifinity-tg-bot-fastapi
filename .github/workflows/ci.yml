@@ -1,0 +1,78 @@
+name: CI - Test and Lint
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main, develop ]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ['3.11', '3.12']
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Python ${{ matrix.python-version }}
+      uses: actions/setup-python@v5
+      with:
+        python-version: ${{ matrix.python-version }}
+        cache: 'pip'
+
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install -r requirements.txt
+        pip install pytest pytest-cov pytest-asyncio flake8 black isort
+
+    - name: Lint with flake8
+      run: |
+        # Stop the build if there are Python syntax errors or undefined names
+        flake8 app --count --select=E9,F63,F7,F82 --show-source --statistics
+        # Exit-zero treats all errors as warnings
+        flake8 app --count --exit-zero --max-complexity=10 --max-line-length=127 --statistics
+
+    - name: Format code with black (auto-fix)
+      run: |
+        black app
+
+    - name: Sort imports with isort (auto-fix)
+      run: |
+        isort app
+    
+    - name: Check for formatting changes
+      run: |
+        if [[ -n $(git status --porcelain) ]]; then
+          echo "Code was reformatted. Please run 'make format' locally before committing."
+          git diff
+          exit 1
+        fi
+
+    - name: Run tests with pytest
+      env:
+        TELEGRAM_BOT_TOKEN: test_token
+        TELEGRAM_WEBHOOK_SECRET: test_secret
+        TELEGRAM_WEBHOOK_URL: https://test.com/webhook
+        BACKEND_API_URL: https://test-backend.com
+        BACKEND_WEBHOOK_SECRET: test_backend_secret
+        OPENAI_API_KEY: test_openai_key
+        ADMIN_GROUP_ID: -1001234567890
+        BUY_TOPIC_ID: 1
+        SELL_TOPIC_ID: 2
+        BALANCE_TOPIC_ID: 3
+        LOG_LEVEL: INFO
+        ENVIRONMENT: test
+      run: |
+        pytest --cov=app --cov-report=xml --cov-report=term-missing
+
+    - name: Upload coverage to Codecov
+      uses: codecov/codecov-action@v4
+      with:
+        file: ./coverage.xml
+        flags: unittests
+        name: codecov-umbrella
+        fail_ci_if_error: false

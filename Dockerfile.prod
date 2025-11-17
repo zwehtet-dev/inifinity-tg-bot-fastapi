@@ -1,0 +1,69 @@
+# Production-optimized multi-stage build for FastAPI Telegram Bot
+FROM python:3.12-slim as builder
+
+# Set working directory
+WORKDIR /app
+
+# Install build dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    gcc \
+    g++ \
+    make \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy requirements file
+COPY requirements.txt .
+
+# Install Python dependencies with optimizations
+RUN pip install --no-cache-dir --user --compile -r requirements.txt
+
+# Final production stage
+FROM python:3.12-slim
+
+# Add labels for better container management
+LABEL maintainer="your-email@example.com"
+LABEL version="1.0.0"
+LABEL description="FastAPI Telegram Bot Engine"
+
+# Create non-root user for security
+RUN groupadd -r botuser && useradd -r -g botuser botuser
+
+# Set working directory
+WORKDIR /app
+
+# Install only runtime dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl \
+    ca-certificates \
+    && rm -rf /var/lib/apt/lists/* \
+    && apt-get clean
+
+# Copy Python dependencies from builder
+COPY --from=builder /root/.local /home/botuser/.local
+
+# Copy application code
+COPY --chown=botuser:botuser app/ ./app/
+COPY --chown=botuser:botuser scripts/ ./scripts/
+
+# Make scripts executable
+RUN chmod +x scripts/*.py
+
+# Switch to non-root user
+USER botuser
+
+# Update PATH to include local Python packages
+ENV PATH=/home/botuser/.local/bin:$PATH
+
+# Set Python to run in unbuffered mode
+ENV PYTHONUNBUFFERED=1
+ENV PYTHONDONTWRITEBYTECODE=1
+
+# Expose port
+EXPOSE 8000
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
+    CMD curl -f http://localhost:8000/health || exit 1
+
+# Run the application with production settings
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "2", "--log-level", "info"]

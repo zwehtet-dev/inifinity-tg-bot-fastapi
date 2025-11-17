@@ -1,0 +1,82 @@
+version: '3.8'
+
+services:
+  bot:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: telegram-bot-fastapi
+    ports:
+      - "8000:8000"
+    environment:
+      # Telegram Configuration
+      - TELEGRAM_BOT_TOKEN=${TELEGRAM_BOT_TOKEN}
+      - TELEGRAM_WEBHOOK_SECRET=${TELEGRAM_WEBHOOK_SECRET}
+      - TELEGRAM_WEBHOOK_URL=${TELEGRAM_WEBHOOK_URL}
+      
+      # Backend Configuration
+      - BACKEND_API_URL=${BACKEND_API_URL}
+      - BACKEND_WEBHOOK_SECRET=${BACKEND_WEBHOOK_SECRET}
+      
+      # OpenAI Configuration
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      
+      # Admin Group Configuration
+      - ADMIN_GROUP_ID=${ADMIN_GROUP_ID}
+      - BUY_TOPIC_ID=${BUY_TOPIC_ID}
+      - SELL_TOPIC_ID=${SELL_TOPIC_ID}
+      - BALANCE_TOPIC_ID=${BALANCE_TOPIC_ID}
+      
+      # Application Configuration
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - ENVIRONMENT=${ENVIRONMENT:-development}
+      - HOST=0.0.0.0
+      - PORT=8000
+    volumes:
+      # Mount app directory for development (hot reload)
+      - ./app:/app/app
+      - ./scripts:/app/scripts
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    networks:
+      - bot-network
+    depends_on:
+      - backend
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  backend:
+    image: python:3.12-slim
+    container_name: telegram-bot-backend
+    working_dir: /app
+    command: >
+      sh -c "pip install -r requirements.txt &&
+             python app.py"
+    ports:
+      - "5000:5000"
+    environment:
+      - FLASK_ENV=${FLASK_ENV:-development}
+      - DATABASE_URL=${DATABASE_URL:-sqlite:///db.sqlite3}
+    volumes:
+      # Mount backend directory (adjust path as needed)
+      - ../inifinity-tg-bot-backend:/app
+    restart: unless-stopped
+    networks:
+      - bot-network
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+networks:
+  bot-network:
+    driver: bridge

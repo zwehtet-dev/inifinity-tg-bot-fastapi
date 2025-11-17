@@ -1,0 +1,103 @@
+name: Deploy to Production
+
+on:
+  push:
+    branches: [ main ]
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Environment to deploy to'
+        required: true
+        default: 'production'
+        type: choice
+        options:
+          - production
+          - staging
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment: 
+      name: ${{ github.event.inputs.environment || 'production' }}
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+
+    - name: Log in to Container Registry
+      uses: docker/login-action@v3
+      with:
+        registry: ghcr.io
+        username: ${{ github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Build and push Docker image
+      uses: docker/build-push-action@v5
+      with:
+        context: ./inifinity-tg-bot-fastapi
+        file: ./inifinity-tg-bot-fastapi/Dockerfile
+        push: true
+        tags: |
+          ghcr.io/${{ github.repository }}/fastapi-bot:latest
+          ghcr.io/${{ github.repository }}/fastapi-bot:${{ github.sha }}
+        cache-from: type=gha
+        cache-to: type=gha,mode=max
+
+    - name: Deploy to server via SSH
+      uses: appleboy/ssh-action@v1.0.0
+      with:
+        host: ${{ secrets.DEPLOY_HOST }}
+        username: ${{ secrets.DEPLOY_USER }}
+        key: ${{ secrets.DEPLOY_SSH_KEY }}
+        port: ${{ secrets.DEPLOY_PORT || 22 }}
+        script: |
+          cd ${{ secrets.DEPLOY_PATH }}
+          
+          # Pull latest image
+          docker pull ghcr.io/${{ github.repository }}/fastapi-bot:latest
+          
+          # Stop and remove old container
+          docker stop telegram-bot-fastapi || true
+          docker rm telegram-bot-fastapi || true
+          
+          # Run new container
+          docker run -d \
+            --name telegram-bot-fastapi \
+            --restart unless-stopped \
+            -p 8000:8000 \
+            --env-file .env \
+            --health-cmd="curl -f http://localhost:8000/health || exit 1" \
+            --health-interval=30s \
+            --health-timeout=10s \
+            --health-retries=3 \
+            --health-start-period=40s \
+            ghcr.io/${{ github.repository }}/fastapi-bot:latest
+          
+          # Clean up old images
+          docker image prune -af --filter "until=24h"
+          
+          # Wait for health check
+          sleep 10
+          docker ps | grep telegram-bot-fastapi
+
+    - name: Verify deployment
+      run: |
+        echo "Deployment completed successfully!"
+        echo "Image: ghcr.io/${{ github.repository }}/fastapi-bot:${{ github.sha }}"
+
+    - name: Notify on failure
+      if: failure()
+      uses: actions/github-script@v7
+      with:
+        script: |
+          github.rest.issues.create({
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            title: '🚨 Deployment Failed',
+            body: `Deployment to ${{ github.event.inputs.environment || 'production' }} failed.\n\nCommit: ${{ github.sha }}\nWorkflow: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}`
+          })

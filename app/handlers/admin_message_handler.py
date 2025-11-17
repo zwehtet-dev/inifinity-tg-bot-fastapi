@@ -1,0 +1,748 @@
+"""
+Admin message handler for processing staff receipt replies in admin group.
+"""
+
+import re
+from typing import Optional
+from telegram import Bot, Update, Message
+from telegram.ext import ContextTypes
+
+from app.logging_config import get_logger
+from app.services.ocr_service import OCRService
+from app.services.order_completion import OrderCompletionService
+from app.services.admin_notifier import AdminNotifier
+from app.services.user_notifier import UserNotifier
+
+
+logger = get_logger(__name__)
+
+
+class AdminMessageHandler:
+    """
+    Handles messages in the admin group, specifically staff receipt replies.
+
+    When staff replies to an order notification with a receipt photo,
+    this handler verifies the receipt amount and processes the order completion.
+    """
+
+    def __init__(
+        self,
+        bot: Bot,
+        admin_group_id: int,
+        buy_topic_id: int,
+        sell_topic_id: int,
+        ocr_service: OCRService,
+        order_completion_service: OrderCompletionService,
+        admin_notifier: AdminNotifier,
+        user_notifier: UserNotifier,
+        backend_api_url: str,
+    ):
+        """
+        Initialize the admin message handler.
+
+        Args:
+            bot: Telegram Bot instance
+            admin_group_id: Admin group chat ID
+            buy_topic_id: Buy topic ID
+            sell_topic_id: Sell topic ID
+            ocr_service: OCR service for receipt extraction
+            order_completion_service: Service for completing orders
+            admin_notifier: Service for sending admin notifications
+            user_notifier: Service for sending user notifications
+            backend_api_url: Backend API URL for fetching order details
+        """
+        self.bot = bot
+        self.admin_group_id = admin_group_id
+        self.buy_topic_id = buy_topic_id
+        self.sell_topic_id = sell_topic_id
+        self.ocr_service = ocr_service
+        self.order_completion_service = order_completion_service
+        self.admin_notifier = admin_notifier
+        self.user_notifier = user_notifier
+        self.backend_api_url = backend_api_url.rstrip("/")
+        logger.info("AdminMessageHandler initialized")
+
+    async def handle_message(
+        self, update: Update, context: ContextTypes.DEFAULT_TYPE
+    ) -> None:
+        """
+        Handle messages in admin group.
+
+        Checks if message is a reply to bot's order notification with a receipt photo.
+        If so, processes the staff receipt verification.
+
+        Args:
+            update: Telegram update object
+            context: Telegram context
+        """
+        message = update.message
+
+        # Check if message is in admin group
+        if message.chat_id != self.admin_group_id:
+            return
+
+        # Check if message is in buy or sell topic
+        if message.message_thread_id not in [self.buy_topic_id, self.sell_topic_id]:
+            logger.debug(f"Message not in buy/sell topic: {message.message_thread_id}")
+            return
+
+        # Check if message is a reply
+        if not message.reply_to_message:
+            logger.debug("Message is not a reply")
+            return
+
+        # Check if reply is to bot's message
+        # Get bot info to compare
+        try:
+            bot_user = await self.bot.get_me()
+            if message.reply_to_message.from_user.id != bot_user.id:
+                logger.debug("Reply is not to bot's message")
+                return
+        except Exception as e:
+            logger.error(f"Error getting bot info: {e}")
+            return
+
+        # Check if message contains a photo
+        if not message.photo:
+            logger.debug("Message does not contain a photo")
+            return
+
+        logger.info(
+            "📸 Staff receipt detected in admin group",
+            extra={
+                "message_id": message.message_id,
+                "topic_id": message.message_thread_id,
+                "from_user": message.from_user.username or message.from_user.id,
+            },
+        )
+
+        # Process the staff receipt (no order ID needed)
+        await self._process_staff_receipt(
+            message=message, topic_id=message.message_thread_id
+        )
+
+    async def _process_staff_receipt(self, message: Message, topic_id: int) -> None:
+        """
+        Process staff receipt: extract amount and verify.
+
+        Args:
+            message: Staff's message with receipt photo
+            topic_id: Topic ID where message was sent
+        """
+        try:
+            # Send acknowledgment
+            await message.reply_text("⏳ Verifying receipt...")
+
+            # Extract order ID from original message (for reference only)
+            order_id = self._extract_order_id_from_message(message.reply_to_message)
+            if order_id:
+                logger.info(f"Found order ID: {order_id}")
+
+            # Get the original message text/caption to extract expected amount
+            original_text = (
+                message.reply_to_message.text or message.reply_to_message.caption or ""
+            )
+
+            # Parse expected amount from original message
+            # Format: "Buy 1000 x 125.78 = 125780" or "Sell 125000 ÷ 125.78 = 993.80"
+            expected_info = self._parse_expected_amount(original_text)
+
+            if not expected_info:
+                await message.reply_text(
+                    "❌ Could not parse expected amount from original message.\n"
+                    "Please ensure you're replying to an order notification."
+                )
+                return
+
+            expected_amount = expected_info["expected_amount"]
+            expected_currency = expected_info["currency"]
+            order_type = expected_info["order_type"]
+            user_sent_amount = expected_info["user_amount"]
+
+            # Set tolerance based on currency
+            if expected_currency == "MMK":
+                tolerance = 1000  # ±1000 MMK
+            else:
+                tolerance = 35  # ±35 THB
+
+            logger.info(
+                f"Expected staff to send: {expected_amount:.2f} {expected_currency} "
+                f"(tolerance: ±{tolerance})"
+            )
+
+            # Download and process receipt image
+            photo = message.photo[-1]  # Get largest photo
+            file = await self.bot.get_file(photo.file_id)
+            image_bytes = await file.download_as_bytearray()
+
+            # Extract amount from receipt using simplified OCR for staff receipts
+            receipt_data = await self._extract_amount_from_staff_receipt(
+                bytes(image_bytes)
+            )
+
+            if not receipt_data or not receipt_data.amount:
+                logger.error("OCR failed to extract amount from staff receipt")
+                await message.reply_text(
+                    "❌ Could not read amount from receipt.\n"
+                    "Please ensure the receipt is clear and try again."
+                )
+                return
+
+            staff_sent_amount = receipt_data.amount
+
+            logger.info(
+                f"Staff receipt amount: {staff_sent_amount:.2f} {expected_currency}"
+            )
+
+            # Verify amount matches (within tolerance)
+            amount_diff = abs(staff_sent_amount - expected_amount)
+
+            if amount_diff <= tolerance:
+                # Amount matches - proceed with completion
+                logger.info(
+                    f"✅ Amount verified: {staff_sent_amount:.2f} ≈ {expected_amount:.2f} "
+                    f"(diff: {amount_diff:.2f}, tolerance: {tolerance})"
+                )
+
+                await message.reply_text(
+                    f"✅ Receipt verified!\n"
+                    f"Expected: {expected_amount:,.2f} {expected_currency}\n"
+                    f"Received: {staff_sent_amount:,.2f} {expected_currency}\n"
+                    f"Difference: {amount_diff:,.2f}\n\n"
+                    f"Amount matches! ✓"
+                )
+
+                # If we have order ID, we can update balances and notify user
+                if order_id:
+                    # Fetch full order details for bank IDs
+                    order_details = await self._fetch_order_details(order_id)
+
+                    if order_details:
+                        thai_bank_id = order_details.get("thai_bank_account_id")
+                        myanmar_bank_id = order_details.get("myanmar_bank_account_id")
+                        chat_id = order_details.get("telegram", {}).get("chat_id")
+                        exchange_rate = order_details.get("price", 0)
+
+                        # Update bank balances
+                        success = await self._update_bank_balances(
+                            order_id=order_id,
+                            order_type=order_type,
+                            user_sent_amount=user_sent_amount,
+                            staff_sent_amount=staff_sent_amount,
+                            thai_bank_id=thai_bank_id,
+                            myanmar_bank_id=myanmar_bank_id,
+                        )
+
+                        if not success:
+                            await message.reply_text(
+                                "⚠️ Receipt verified but failed to update bank balances. "
+                                "Please check logs and update manually."
+                            )
+                            return
+
+                        # Update order status to "approved"
+                        status_updated = await self._update_order_status(
+                            order_id, "approved"
+                        )
+                        if not status_updated:
+                            logger.warning(
+                                f"⚠️ Failed to update order status to approved for {order_id}"
+                            )
+                            await message.reply_text(
+                                "⚠️ Balances updated but failed to update order status. "
+                                "Please update order status to 'approved' manually."
+                            )
+
+                        # Send balance notification
+                        myanmar_banks, thai_banks, balances = (
+                            await self.order_completion_service.fetch_all_banks_with_balances()
+                        )
+                        await self.admin_notifier.send_balance_notification(
+                            myanmar_banks=myanmar_banks,
+                            thai_banks=thai_banks,
+                            balances=balances,
+                        )
+
+                        # Upload admin confirmation receipt to backend
+                        logger.info(
+                            f"📤 Uploading admin confirmation receipt for order {order_id}"
+                        )
+                        receipt_uploaded = await self._upload_confirm_receipt(
+                            order_id, photo.file_id
+                        )
+
+                        if not receipt_uploaded:
+                            logger.warning(
+                                f"⚠️ Failed to upload confirmation receipt for order {order_id}"
+                            )
+
+                        # Notify user of completion
+                        if chat_id:
+                            logger.info(
+                                f"📤 Sending success notification to user (chat_id={chat_id})"
+                            )
+                            try:
+                                await self.user_notifier.send_success_message(
+                                    chat_id=int(chat_id),
+                                    user_id=int(chat_id),
+                                    order_id=order_id,
+                                    order_type=order_type,
+                                    sent_amount=user_sent_amount,
+                                    sent_currency=(
+                                        "THB" if order_type == "buy" else "MMK"
+                                    ),
+                                    received_amount=staff_sent_amount,
+                                    received_currency=expected_currency,
+                                    exchange_rate=exchange_rate,
+                                    admin_receipt_file_id=photo.file_id,
+                                )
+                                logger.info(
+                                    f"✅ User notification sent successfully to chat_id={chat_id}"
+                                )
+                            except Exception as notify_error:
+                                logger.error(
+                                    f"❌ Failed to send user notification: {notify_error}",
+                                    exc_info=True,
+                                )
+                                await message.reply_text(
+                                    f"⚠️ Order completed but failed to notify user.\n"
+                                    f"Error: {str(notify_error)}\n"
+                                    f"Please notify user manually."
+                                )
+                                return
+                        else:
+                            logger.warning(
+                                f"⚠️ No chat_id found for order {order_id}, cannot notify user"
+                            )
+
+                        await message.reply_text(
+                            f"✅ Order {order_id} completed successfully!\n"
+                            f"Bank balances updated and user notified."
+                        )
+                    else:
+                        await message.reply_text(
+                            "✅ Amount verified but could not fetch order details.\n"
+                            "Please update balances manually."
+                        )
+                else:
+                    await message.reply_text(
+                        "✅ Amount verified!\n"
+                        "Note: Could not find order ID, please update balances manually."
+                    )
+
+            else:
+                # Amount mismatch
+                logger.warning(
+                    f"❌ Amount mismatch: {staff_sent_amount:.2f} vs {expected_amount:.2f} "
+                    f"(diff: {amount_diff:.2f}, tolerance: {tolerance})"
+                )
+
+                await message.reply_text(
+                    f"❌ Amount mismatch!\n\n"
+                    f"Expected: {expected_amount:,.2f} {expected_currency}\n"
+                    f"Received: {staff_sent_amount:,.2f} {expected_currency}\n"
+                    f"Difference: {amount_diff:,.2f} (tolerance: ±{tolerance})\n\n"
+                    f"Please verify the receipt and try again, or contact admin for manual processing."
+                )
+
+        except Exception as e:
+            logger.error(f"Error processing staff receipt: {e}", exc_info=True)
+            await message.reply_text(
+                f"❌ Error processing receipt: {str(e)}\n"
+                f"Please contact admin for manual processing."
+            )
+
+    def _extract_order_id_from_message(self, message: Message) -> Optional[str]:
+        """
+        Extract order ID from message text/caption.
+
+        Looks for patterns:
+        - "Order: 251225A0001B" (preferred format)
+        - "251225A0001B" (fallback)
+
+        Args:
+            message: Message to extract from
+
+        Returns:
+            Order ID or None
+        """
+        if not message:
+            return None
+
+        text = message.text or message.caption or ""
+
+        # Try to find "Order: XXXXXX" format first
+        order_pattern = r"Order:\s*(\d{6}A\d{4}[BS])"
+        order_match = re.search(order_pattern, text, re.IGNORECASE)
+        if order_match:
+            return order_match.group(1)
+
+        # Fallback: find order ID pattern anywhere in text
+        # Pattern: DDMMYYA####B/S (e.g., 251225A0001B)
+        pattern = r"\d{6}A\d{4}[BS]"
+        match = re.search(pattern, text)
+        if match:
+            return match.group(0)
+
+        return None
+
+    async def _extract_amount_from_staff_receipt(
+        self, image_bytes: bytes
+    ) -> Optional[any]:
+        """
+        Extract amount from staff receipt using simplified OCR.
+
+        This uses a custom prompt optimized for staff receipts that only extracts
+        the transfer amount without bank validation.
+
+        Args:
+            image_bytes: Receipt image bytes
+
+        Returns:
+            ReceiptData-like object with amount, or None if extraction fails
+        """
+        try:
+            import base64
+            from langchain_openai import ChatOpenAI
+            from langchain_core.messages import HumanMessage
+            from app.config import get_settings
+
+            settings = get_settings()
+
+            # Encode image
+            image_base64 = base64.b64encode(image_bytes).decode("utf-8")
+            image_data_url = f"data:image/jpeg;base64,{image_base64}"
+
+            # Simplified prompt for staff receipts - only extract amount
+            prompt = """You are analyzing a bank transfer receipt from staff to a customer.
+
+**Your task: Extract ONLY the transfer amount from this receipt.**
+
+Look for:
+- The main transfer/payment amount (usually the largest number)
+- Keywords: "Amount", "จำนวนเงิน", "Total", "ยอดโอน", "Transfer Amount"
+- Ignore: fees, balance, previous transactions
+
+**CRITICAL RULES:**
+1. Extract ONLY the numeric value (no currency symbols, no commas)
+2. This should be the amount SENT/TRANSFERRED (not balance, not fee)
+3. If you cannot find a clear transfer amount, return 0
+4. Common formats: "200,000", "200000", "200,000.00"
+
+**Examples:**
+- Receipt shows "จำนวนเงิน 200,000 บาท" → Return: 200000
+- Receipt shows "Transfer Amount: 125,780 MMK" → Return: 125780
+- Receipt shows "Amount: 1,500.00" → Return: 1500
+
+Return the data in this exact JSON format:
+{
+    "amount": <numeric_value>,
+    "bank_name": "STAFF_RECEIPT",
+    "account_number": "N/A",
+    "account_name": "N/A",
+    "confidence_score": 1.0
+}
+
+If you cannot find a transfer amount, return:
+{
+    "amount": 0,
+    "bank_name": "UNCLEAR",
+    "account_number": "N/A",
+    "account_name": "N/A",
+    "confidence_score": 0.0
+}"""
+
+            # Initialize LLM with structured output
+            from app.models.receipt import ReceiptData
+
+            llm = ChatOpenAI(
+                model="gpt-4o-mini",
+                temperature=0,
+                openai_api_key=settings.openai_api_key,
+                max_tokens=500,
+            ).with_structured_output(ReceiptData)
+
+            # Create message
+            message = HumanMessage(
+                content=[
+                    {"type": "text", "text": prompt},
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": image_data_url, "detail": "high"},
+                    },
+                ]
+            )
+
+            logger.info(
+                "🔍 Extracting amount from staff receipt with simplified OCR..."
+            )
+
+            # Invoke with timeout
+            import asyncio
+
+            result = await asyncio.wait_for(llm.ainvoke([message]), timeout=30)
+
+            if result and result.amount > 0:
+                logger.info(f"✅ Extracted amount from staff receipt: {result.amount}")
+                return result
+            else:
+                logger.warning("❌ Could not extract valid amount from staff receipt")
+                return None
+
+        except Exception as e:
+            logger.error(
+                f"Error extracting amount from staff receipt: {e}", exc_info=True
+            )
+            return None
+
+    def _parse_expected_amount(self, text: str) -> Optional[dict]:
+        """
+        Parse expected amount from order notification message.
+
+        Formats:
+        - "Buy 1000 x 125.78 = 125780" (user sends THB, staff sends MMK)
+        - "Sell 125000 ÷ 125.78 = 993.80" (user sends MMK, staff sends THB)
+
+        Args:
+            text: Message text to parse
+
+        Returns:
+            Dict with order_type, user_amount, expected_amount, currency
+        """
+        try:
+            # Try Buy format: "Buy {amount} x {rate} = {result}"
+            buy_pattern = r"Buy\s+([\d,]+(?:\.\d+)?)\s*[x×]\s*([\d,]+(?:\.\d+)?)\s*=\s*([\d,]+(?:\.\d+)?)"
+            buy_match = re.search(buy_pattern, text, re.IGNORECASE)
+
+            if buy_match:
+                user_amount = float(buy_match.group(1).replace(",", ""))
+                expected_amount = float(buy_match.group(3).replace(",", ""))
+                return {
+                    "order_type": "buy",
+                    "user_amount": user_amount,
+                    "expected_amount": expected_amount,
+                    "currency": "MMK",
+                }
+
+            # Try Sell format: "Sell {amount} ÷ {rate} = {result}"
+            sell_pattern = r"Sell\s+([\d,]+(?:\.\d+)?)\s*[÷/]\s*([\d,]+(?:\.\d+)?)\s*=\s*([\d,]+(?:\.\d+)?)"
+            sell_match = re.search(sell_pattern, text, re.IGNORECASE)
+
+            if sell_match:
+                user_amount = float(sell_match.group(1).replace(",", ""))
+                expected_amount = float(sell_match.group(3).replace(",", ""))
+                return {
+                    "order_type": "sell",
+                    "user_amount": user_amount,
+                    "expected_amount": expected_amount,
+                    "currency": "THB",
+                }
+
+            logger.warning(f"Could not parse expected amount from: {text[:100]}")
+            return None
+
+        except Exception as e:
+            logger.error(f"Error parsing expected amount: {e}")
+            return None
+
+    async def _fetch_order_details(self, order_id: str) -> Optional[dict]:
+        """
+        Fetch order details from backend.
+
+        Args:
+            order_id: Order ID to fetch
+
+        Returns:
+            Order details dict or None if fetch fails
+        """
+        try:
+            import aiohttp
+
+            async with aiohttp.ClientSession() as session:
+                async with session.get(
+                    f"{self.backend_api_url}/api/orders/{order_id}",
+                    timeout=aiohttp.ClientTimeout(total=10),
+                ) as response:
+                    if response.status == 200:
+                        return await response.json()
+                    else:
+                        logger.error(
+                            f"Failed to fetch order {order_id}: {response.status}"
+                        )
+                        return None
+        except Exception as e:
+            logger.error(f"Error fetching order details: {e}", exc_info=True)
+            return None
+
+    async def _upload_confirm_receipt(self, order_id: str, photo_file_id: str) -> bool:
+        """
+        Upload admin confirmation receipt to backend.
+
+        Args:
+            order_id: Order ID
+            photo_file_id: Telegram file ID of admin's receipt photo
+
+        Returns:
+            True if successful, False otherwise
+        """
+        try:
+            import aiohttp
+            from aiohttp import FormData
+
+            # Download photo from Telegram
+            file = await self.bot.get_file(photo_file_id)
+            photo_bytes = await file.download_as_bytearray()
+
+            # Prepare multipart form data
+            data = FormData()
+            data.add_field(
+                "receipt",
+                bytes(photo_bytes),
+                filename=f"{order_id}_confirm.jpg",
+                content_type="image/jpeg",
+            )
+
+            # Upload to backend
+            async with aiohttp.ClientSession() as session:
+                async with session.post(
+                    f"{self.backend_api_url}/api/orders/{order_id}/confirm-receipt",
+                    data=data,
+                    timeout=aiohttp.ClientTimeout(total=30),
+                ) as response:
+                    if response.status == 200:
+                        logger.info(
+                            f"✅ Confirmation receipt uploaded for order {order_id}"
+                        )
+                        return True
+                    else:
+                        error_text = await response.text()
+                        logger.error(
+                            f"Failed to upload confirmation receipt: {response.status} - {error_text}"
+                        )
+                        return False
+
+        except Exception as e:
+            logger.error(f"Error uploading confirmation receipt: {e}", exc_info=True)
+            return False
+
+    async def _update_bank_balances(
+        self,
+        order_id: str,
+        order_type: str,
+        user_sent_amount: float,
+        staff_sent_amount: float,
+        thai_bank_id: Optional[int],
+        myanmar_bank_id: Optional[int],
+    ) -> bool:
+        """
+        Update bank balances after staff receipt verification.
+
+        For BUY orders:
+        - Increase Thai bank (user sent THB)
+        - Decrease Myanmar bank (staff sent MMK)
+
+        For SELL orders:
+        - Increase Myanmar bank (user sent MMK)
+        - Decrease Thai bank (staff sent THB)
+
+        Args:
+            order_id: Order ID
+            order_type: "buy" or "sell"
+            user_sent_amount: Amount user sent
+            staff_sent_amount: Amount staff sent
+            thai_bank_id: Thai bank account ID
+            myanmar_bank_id: Myanmar bank account ID
+
+        Returns:
+            True if successful, False otherwise
+        """
+        try:
+            import aiohttp
+
+            if order_type == "buy":
+                # Buy: user sent THB, staff sent MMK
+                thai_change = user_sent_amount  # Increase (received from user)
+                myanmar_change = -staff_sent_amount  # Decrease (sent to user)
+            else:
+                # Sell: user sent MMK, staff sent THB
+                thai_change = -staff_sent_amount  # Decrease (sent to user)
+                myanmar_change = user_sent_amount  # Increase (received from user)
+
+            payload = {
+                "order_id": order_id,
+                "order_type": order_type,
+                "thai_bank_id": thai_bank_id,
+                "thai_amount_change": thai_change,
+                "myanmar_bank_id": myanmar_bank_id,
+                "myanmar_amount_change": myanmar_change,
+            }
+
+            logger.info(f"💰 Updating bank balances for {order_type.upper()} order:")
+            logger.info(
+                f"   User sent: {user_sent_amount:,.2f} {'THB' if order_type == 'buy' else 'MMK'}"
+            )
+            logger.info(
+                f"   Staff sent: {staff_sent_amount:,.2f} {'MMK' if order_type == 'buy' else 'THB'}"
+            )
+            logger.info(f"   Thai bank change: {thai_change:+,.2f}")
+            logger.info(f"   Myanmar bank change: {myanmar_change:+,.2f}")
+            logger.info(f"   Thai bank ID: {thai_bank_id}")
+            logger.info(f"   Myanmar bank ID: {myanmar_bank_id}")
+
+            async with aiohttp.ClientSession() as session:
+                async with session.post(
+                    f"{self.backend_api_url}/api/banks/update-balance",
+                    json=payload,
+                    timeout=aiohttp.ClientTimeout(total=10),
+                ) as response:
+                    if response.status in [200, 201]:
+                        logger.info(f"✅ Bank balances updated for order {order_id}")
+                        return True
+                    else:
+                        error_text = await response.text()
+                        logger.error(
+                            f"Failed to update bank balances: {response.status} - {error_text}"
+                        )
+                        return False
+
+        except Exception as e:
+            logger.error(f"Error updating bank balances: {e}", exc_info=True)
+            return False
+
+    async def _update_order_status(self, order_id: str, status: str) -> bool:
+        """
+        Update order status in backend.
+
+        Args:
+            order_id: Order ID
+            status: New status (e.g., "approved", "declined")
+
+        Returns:
+            True if successful, False otherwise
+        """
+        try:
+            import aiohttp
+
+            payload = {"status": status}
+
+            logger.info(f"📝 Updating order {order_id} status to: {status}")
+
+            async with aiohttp.ClientSession() as session:
+                async with session.patch(
+                    f"{self.backend_api_url}/api/orders/{order_id}/status",
+                    json=payload,
+                    timeout=aiohttp.ClientTimeout(total=10),
+                ) as response:
+                    if response.status in [200, 201]:
+                        logger.info(f"✅ Order {order_id} status updated to {status}")
+                        return True
+                    else:
+                        error_text = await response.text()
+                        logger.error(
+                            f"Failed to update order status: {response.status} - {error_text}"
+                        )
+                        return False
+
+        except Exception as e:
+            logger.error(f"Error updating order status: {e}", exc_info=True)
+            return False
