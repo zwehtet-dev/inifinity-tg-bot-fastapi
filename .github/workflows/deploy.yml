@@ -1,10 +1,11 @@
 name: Deploy to Production
 
 on:
-  push:
-    branches: [ main ]
-    tags:
-      - 'v*'
+  # Automatic deployment disabled - run manually when ready
+  # push:
+  #   branches: [ main ]
+  #   tags:
+  #     - 'v*'
   workflow_dispatch:
     inputs:
       environment:
@@ -55,11 +56,18 @@ jobs:
         username: ${{ secrets.DEPLOY_USER }}
         key: ${{ secrets.DEPLOY_SSH_KEY }}
         port: ${{ secrets.DEPLOY_PORT || 22 }}
+        envs: GITHUB_TOKEN,GITHUB_ACTOR,IMAGE_NAME
         script: |
           cd ${{ secrets.DEPLOY_PATH }}
           
+          # Login to GitHub Container Registry
+          echo "$GITHUB_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
+          
           # Pull latest image
-          docker pull ghcr.io/${{ github.repository }}/fastapi-bot:latest
+          docker pull "$IMAGE_NAME"
+          
+          # Logout from registry
+          docker logout ghcr.io
           
           # Stop and remove old container
           docker stop telegram-bot-fastapi || true
@@ -76,7 +84,7 @@ jobs:
             --health-timeout=10s \
             --health-retries=3 \
             --health-start-period=40s \
-            ghcr.io/${{ github.repository }}/fastapi-bot:latest
+            "$IMAGE_NAME"
           
           # Clean up old images
           docker image prune -af --filter "until=24h"
@@ -84,6 +92,10 @@ jobs:
           # Wait for health check
           sleep 10
           docker ps | grep telegram-bot-fastapi
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        GITHUB_ACTOR: ${{ github.actor }}
+        IMAGE_NAME: ghcr.io/${{ github.repository }}/fastapi-bot:latest
 
     - name: Verify deployment
       run: |
