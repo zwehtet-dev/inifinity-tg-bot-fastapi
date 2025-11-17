@@ -115,7 +115,6 @@ class SettingsService:
                 # Convert list of dicts to dict with bank_name as key for backward compatibility
                 banks = {
                     item["bank_name"]: (
-                        item["bank_name"],
                         item["account_number"],
                         item["account_name"],
                         item.get("qr_image"),
