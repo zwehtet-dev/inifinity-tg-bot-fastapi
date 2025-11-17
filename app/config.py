@@ -39,7 +39,7 @@ class Settings(BaseSettings):
     # Application Configuration
     log_level: str = Field(default="INFO", description="Logging level")
     environment: str = Field(default="production", description="Environment name")
-    host: str = Field(default="0.0.0.0", description="Host to bind to")
+    host: str = Field(default="0.0.0.0", description="Host to bind to")  # nosec B104
     port: int = Field(default=8000, description="Port to bind to")
 
     @field_validator("log_level")

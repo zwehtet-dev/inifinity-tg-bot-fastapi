@@ -376,8 +376,11 @@ class BackendWebhookHandler:
                     user_id=user_id,
                     error_message="There was an error processing your order completion. Please contact support.",
                 )
-            except:
-                pass
+            except Exception as e:
+                logger.error(
+                    f"Failed to send error notification to user {user_id}: {e}",
+                    exc_info=True,
+                )
 
     async def _fetch_order_details(self, order_id: str) -> Optional[dict]:
         """
