@@ -50,17 +50,30 @@ class AdminNotifier:
         self.balance_topic_id = balance_topic_id
 
     async def send_order_notification(
-        self, order: OrderData, user_telegram_id: str, user_name: Optional[str] = None
+        self, order: OrderData, user_telegram_id: str, user_name: Optional[str] = None, order_id: Optional[str] = None
     ) -> bool:
         """
         Send order notification to appropriate topic (Buy or Sell) based on order type.
+        
+        NO BUTTONS - Staff replies directly to this message with:
+        - Receipt photo (for approval)
+        - "Reject: {reason}" (for rejection)
+        - "Complain: {message}" (for complaint)
 
-        Format: "[user sent receipt] {order_type} {amount} x {rate} = {total} {user bank info}"
+        Format: 
+        🧾 [User sent receipt]
+        
+        📝 Order: {order_id}
+        📋 Order Type: {BUY/SELL}
+        👤 User: {name}
+        💰 {operation}: {sent_amount} {currency} × {rate} = {received_amount} {currency}
+        🏦 User Bank: {bank_info}
 
         Args:
             order: OrderData containing order details
             user_telegram_id: User's Telegram ID
             user_name: Optional user's display name
+            order_id: Optional order ID to include in notification
 
         Returns:
             True if notification sent successfully, False otherwise
@@ -74,49 +87,51 @@ class AdminNotifier:
                 self.buy_topic_id if order.order_type == "buy" else self.sell_topic_id
             )
 
-            # Calculate total amount
+            # Calculate amounts and format operation
             if order.order_type == "buy":
                 # Buy: user sends THB, receives MMK
                 sent_amount = order.thb_amount or 0
-                received_amount = order.mmk_amount or 0
+                received_amount = sent_amount * (order.exchange_rate or 0)
                 sent_currency = "THB"
                 received_currency = "MMK"
+                operation = "Buy"
+                calculation = f"{sent_amount:,.2f} × {order.exchange_rate:.2f} = {received_amount:,.2f}"
             else:
                 # Sell: user sends MMK, receives THB
                 sent_amount = order.mmk_amount or 0
-                received_amount = order.thb_amount or 0
+                received_amount = sent_amount / (order.exchange_rate or 1)
                 sent_currency = "MMK"
                 received_currency = "THB"
-
-            # Format order type text
-            order_type_text = order.order_type.upper()
+                operation = "Sell"
+                calculation = f"{sent_amount:,.2f} ÷ {order.exchange_rate:.2f} = {received_amount:,.2f}"
 
             # Format user identification
-            user_info = f"User: {user_name or user_telegram_id}"
+            user_info = user_name or user_telegram_id
 
-            # Format message
-            message = (
-                f"🧾 [User sent receipt]\n\n"
-                f"📋 Order Type: {order_type_text}\n"
-                f"👤 {user_info}\n"
-                f"💰 Amount: {sent_amount:,.2f} {sent_currency} × {order.exchange_rate:.6f} = {received_amount:,.2f} {received_currency}\n"
+            # Format message - clean and simple
+            message = "🧾 [User sent receipt]\n\n"
+            
+            # Add order ID if available
+            if order_id:
+                message += f"📝 Order: {order_id}\n"
+            
+            message += (
+                f"📋 Order Type: {order.order_type.upper()}\n"
+                f"👤 User: {user_info}\n"
+                f"💰 {operation} {calculation}\n"
             )
 
             # Add user bank info if available
             if order.user_bank_info:
                 message += f"🏦 User Bank: {order.user_bank_info}\n"
 
-            # Add Myanmar bank if selected
-            if order.myanmar_bank_account:
-                message += f"🏦 Myanmar Bank: {order.myanmar_bank_account}\n"
-
             logger.info(
                 f"Sending {order.order_type} order notification to topic {topic_id} "
                 f"for user {user_telegram_id}"
             )
 
-            # Send text message first
-            await self.bot.send_message(
+            # Send text message first (NO BUTTONS - staff replies directly)
+            sent_message = await self.bot.send_message(
                 chat_id=self.admin_group_id, message_thread_id=topic_id, text=message
             )
 
@@ -125,10 +140,10 @@ class AdminNotifier:
                 await self._send_receipt_images(
                     topic_id=topic_id,
                     file_ids=order.receipt_file_ids,
-                    caption=f"Receipt(s) from {user_name or user_telegram_id}",
+                    caption=f"Receipt(s) from {user_info}",
                 )
 
-            # Send user's bank QR code if provided (instead of text bank info)
+            # Send user's bank QR code if provided
             if order.user_bank_qr_file_id:
                 await self.bot.send_photo(
                     chat_id=self.admin_group_id,
@@ -137,15 +152,6 @@ class AdminNotifier:
                     caption="🏦 User's Bank QR Code",
                 )
                 logger.info(f"Sent user's bank QR code to topic {topic_id}")
-
-            # Send legacy QR code if available (for backward compatibility)
-            if order.qr_file_id:
-                await self.bot.send_photo(
-                    chat_id=self.admin_group_id,
-                    message_thread_id=topic_id,
-                    photo=order.qr_file_id,
-                    caption="QR Code",
-                )
 
             logger.info(f"Successfully sent order notification to topic {topic_id}")
             return True

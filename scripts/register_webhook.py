@@ -30,7 +30,7 @@ async def main():
     """Register webhook with Telegram."""
     # Get configuration from environment
     bot_token = os.getenv("TELEGRAM_BOT_TOKEN")
-    webhook_url = os.getenv("WEBHOOK_URL")
+    webhook_url = os.getenv("WEBHOOK_URL") or os.getenv("TELEGRAM_WEBHOOK_URL")
     webhook_secret = os.getenv("TELEGRAM_WEBHOOK_SECRET")
     
     # Validate required environment variables

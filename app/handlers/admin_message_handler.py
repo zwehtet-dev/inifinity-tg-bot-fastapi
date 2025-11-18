@@ -102,24 +102,58 @@ class AdminMessageHandler:
             logger.error(f"Error getting bot info: {e}")
             return
 
-        # Check if message contains a photo
-        if not message.photo:
-            logger.debug("Message does not contain a photo")
+        # Check if message contains a photo (receipt)
+        if message.photo:
+            logger.info(
+                "📸 Staff receipt detected in admin group",
+                extra={
+                    "message_id": message.message_id,
+                    "topic_id": message.message_thread_id,
+                    "from_user": message.from_user.username or message.from_user.id,
+                },
+            )
+
+            # Process the staff receipt (no order ID needed)
+            await self._process_staff_receipt(
+                message=message, topic_id=message.message_thread_id
+            )
             return
 
-        logger.info(
-            "📸 Staff receipt detected in admin group",
-            extra={
-                "message_id": message.message_id,
-                "topic_id": message.message_thread_id,
-                "from_user": message.from_user.username or message.from_user.id,
-            },
-        )
+        # Check if message contains text (Reject or Complain)
+        if message.text:
+            text = message.text.strip()
+            
+            # Check for Reject: prefix
+            if text.startswith("Reject:") or text.startswith("reject:"):
+                logger.info(
+                    "❌ Staff rejection detected in admin group",
+                    extra={
+                        "message_id": message.message_id,
+                        "topic_id": message.message_thread_id,
+                        "from_user": message.from_user.username or message.from_user.id,
+                    },
+                )
+                await self._process_staff_rejection(message=message)
+                return
+            
+            # Check for Complain: prefix
+            if text.startswith("Complain:") or text.startswith("complain:"):
+                logger.info(
+                    "⚠️ Staff complaint detected in admin group",
+                    extra={
+                        "message_id": message.message_id,
+                        "topic_id": message.message_thread_id,
+                        "from_user": message.from_user.username or message.from_user.id,
+                    },
+                )
+                await self._process_staff_complaint(message=message)
+                return
+            
+            logger.debug("Message text does not match Reject: or Complain: pattern")
+            return
 
-        # Process the staff receipt (no order ID needed)
-        await self._process_staff_receipt(
-            message=message, topic_id=message.message_thread_id
-        )
+        logger.debug("Message does not contain photo or text")
+        return
 
     async def _process_staff_receipt(self, message: Message, topic_id: int) -> None:
         """
@@ -315,8 +349,9 @@ class AdminMessageHandler:
                                 f"⚠️ No chat_id found for order {order_id}, cannot notify user"
                             )
 
-                        await message.reply_text(
-                            f"✅ Order {order_id} completed successfully!\n"
+                        # Don't send success message in admin group to reduce noise
+                        logger.info(
+                            f"✅ Order {order_id} completed successfully! "
                             f"Bank balances updated and user notified."
                         )
                     else:
@@ -746,3 +781,203 @@ If you cannot find a transfer amount, return:
         except Exception as e:
             logger.error(f"Error updating order status: {e}", exc_info=True)
             return False
+
+    async def _process_staff_rejection(self, message: Message) -> None:
+        """
+        Process staff rejection: extract order ID, update status, notify user.
+
+        Args:
+            message: Staff's message with rejection text
+        """
+        try:
+            # Extract order ID from original message
+            order_id = self._extract_order_id_from_message(message.reply_to_message)
+            if not order_id:
+                await message.reply_text(
+                    "❌ Could not find order ID in the original message.\n"
+                    "Please ensure you're replying to an order notification."
+                )
+                return
+
+            # Extract rejection reason (text after "Reject:")
+            text = message.text.strip()
+            if text.lower().startswith("reject:"):
+                rejection_reason = text[7:].strip()  # Remove "Reject:" prefix
+            else:
+                rejection_reason = text[7:].strip()  # Remove "reject:" prefix
+
+            if not rejection_reason:
+                rejection_reason = "No reason provided"
+
+            logger.info(
+                f"Processing rejection for order {order_id}: {rejection_reason}"
+            )
+
+            # Fetch order details to get chat_id
+            order_details = await self._fetch_order_details(order_id)
+            if not order_details:
+                await message.reply_text(
+                    f"❌ Could not fetch order details for {order_id}.\n"
+                    "Please update status manually."
+                )
+                return
+
+            chat_id = order_details.get("telegram", {}).get("chat_id")
+            order_type = order_details.get("order_type", "unknown")
+
+            # Update order status to "rejected"
+            status_updated = await self._update_order_status(order_id, "rejected")
+            if not status_updated:
+                await message.reply_text(
+                    f"⚠️ Failed to update order status to rejected for {order_id}.\n"
+                    "Please update manually."
+                )
+                return
+
+            # Notify user
+            if chat_id:
+                try:
+                    user_message = (
+                        f"❌ Order Rejected\n\n"
+                        f"Order ID: {order_id}\n"
+                        f"Type: {order_type.upper()}\n\n"
+                        f"Reason: {rejection_reason}\n\n"
+                        f"Please contact support if you have any questions.\n"
+                        f"Use /start to create a new order."
+                    )
+                    
+                    await self.bot.send_message(
+                        chat_id=int(chat_id),
+                        text=user_message
+                    )
+                    
+                    logger.info(
+                        f"✅ User notified of rejection for order {order_id}"
+                    )
+                    
+                    # Don't send success message in admin group to reduce noise
+                    logger.info(f"✅ Order {order_id} rejected and user notified.")
+                except Exception as notify_error:
+                    logger.error(
+                        f"❌ Failed to send rejection notification: {notify_error}",
+                        exc_info=True,
+                    )
+                    await message.reply_text(
+                        f"⚠️ Order rejected but failed to notify user.\n"
+                        f"Please notify user manually."
+                    )
+            else:
+                logger.warning(
+                    f"⚠️ No chat_id found for order {order_id}, cannot notify user"
+                )
+                await message.reply_text(
+                    f"✅ Order {order_id} rejected but no chat_id found.\n"
+                    "Please notify user manually."
+                )
+
+        except Exception as e:
+            logger.error(f"Error processing staff rejection: {e}", exc_info=True)
+            await message.reply_text(
+                f"❌ Error processing rejection: {str(e)}\n"
+                f"Please update status manually."
+            )
+
+    async def _process_staff_complaint(self, message: Message) -> None:
+        """
+        Process staff complaint: extract order ID, update status, notify user.
+
+        Args:
+            message: Staff's message with complaint text
+        """
+        try:
+            # Extract order ID from original message
+            order_id = self._extract_order_id_from_message(message.reply_to_message)
+            if not order_id:
+                await message.reply_text(
+                    "❌ Could not find order ID in the original message.\n"
+                    "Please ensure you're replying to an order notification."
+                )
+                return
+
+            # Extract complaint message (text after "Complain:")
+            text = message.text.strip()
+            if text.lower().startswith("complain:"):
+                complaint_message = text[9:].strip()  # Remove "Complain:" prefix
+            else:
+                complaint_message = text[9:].strip()  # Remove "complain:" prefix
+
+            if not complaint_message:
+                complaint_message = "No message provided"
+
+            logger.info(
+                f"Processing complaint for order {order_id}: {complaint_message}"
+            )
+
+            # Fetch order details to get chat_id
+            order_details = await self._fetch_order_details(order_id)
+            if not order_details:
+                await message.reply_text(
+                    f"❌ Could not fetch order details for {order_id}.\n"
+                    "Please update status manually."
+                )
+                return
+
+            chat_id = order_details.get("telegram", {}).get("chat_id")
+            order_type = order_details.get("order_type", "unknown")
+
+            # Update order status to "complain"
+            status_updated = await self._update_order_status(order_id, "complain")
+            if not status_updated:
+                await message.reply_text(
+                    f"⚠️ Failed to update order status to complain for {order_id}.\n"
+                    "Please update manually."
+                )
+                return
+
+            # Notify user
+            if chat_id:
+                try:
+                    user_message = (
+                        f"⚠️ Order Issue\n\n"
+                        f"Order ID: {order_id}\n"
+                        f"Type: {order_type.upper()}\n\n"
+                        f"Message from admin:\n{complaint_message}\n\n"
+                        f"Please contact support for assistance.\n"
+                        f"Use /start to create a new order."
+                    )
+                    
+                    await self.bot.send_message(
+                        chat_id=int(chat_id),
+                        text=user_message
+                    )
+                    
+                    logger.info(
+                        f"✅ User notified of complaint for order {order_id}"
+                    )
+                    
+                    # Don't send success message in admin group to reduce noise
+                    logger.info(f"✅ Order {order_id} marked as complaint and user notified.")
+                except Exception as notify_error:
+                    logger.error(
+                        f"❌ Failed to send complaint notification: {notify_error}",
+                        exc_info=True,
+                    )
+                    await message.reply_text(
+                        f"⚠️ Order marked as complaint but failed to notify user.\n"
+                        f"Please notify user manually."
+                    )
+            else:
+                logger.warning(
+                    f"⚠️ No chat_id found for order {order_id}, cannot notify user"
+                )
+                await message.reply_text(
+                    f"✅ Order {order_id} marked as complaint but no chat_id found.\n"
+                    "Please notify user manually."
+                )
+
+        except Exception as e:
+            logger.error(f"Error processing staff complaint: {e}", exc_info=True)
+            await message.reply_text(
+                f"❌ Error processing complaint: {str(e)}\n"
+                f"Please update status manually."
+            )

@@ -31,6 +31,7 @@ class ConversationHandler:
         message_poller=None,
         order_service=None,
         settings_service=None,
+        admin_notifier=None,
     ):
         """
         Initialize the conversation handler.
@@ -42,6 +43,7 @@ class ConversationHandler:
             message_poller: Optional MessagePoller for polling backend messages
             order_service: Optional OrderService for order submission and queries
             settings_service: Optional SettingsService for exchange rates and bank accounts
+            admin_notifier: Optional AdminNotifier for sending admin notifications
         """
         self.bot = bot
         self.state_manager = state_manager
@@ -49,6 +51,7 @@ class ConversationHandler:
         self.message_poller = message_poller
         self.order_service = order_service
         self.settings_service = settings_service
+        self.admin_notifier = admin_notifier
         logger.info("ConversationHandler initialized")
 
     async def handle_start(self, user_id: int, chat_id: int) -> None:
@@ -197,36 +200,36 @@ class ConversationHandler:
         """
         # Get exchange rates from settings service
         # Backend returns rates from BUSINESS perspective:
-        #   buy = rate business BUYS MMK from user (user sells MMK)
-        #   sell = rate business SELLS MMK to user (user buys MMK)
+        #   buy_rate = rate business BUYS MMK from user (user sells MMK) - MMK per THB
+        #   sell_rate = rate business SELLS MMK to user (user buys MMK) - MMK per THB
         # So from USER perspective:
-        #   User buys MMK (sends THB) -> use backend's SELL rate
-        #   User sells MMK (sends MMK) -> use backend's BUY rate
+        #   User buys MMK (sends THB) -> use backend's SELL rate (1 THB = X MMK)
+        #   User sells MMK (sends MMK) -> use backend's BUY rate (1 MMK = 1/X THB)
 
-        thb_to_mmk = 285.71  # Default fallback (1 THB = 285.71 MMK)
-        mmk_to_thb = 0.0035  # Default fallback (1 MMK = 0.0035 THB)
+        buy_mmk_rate = 125.78  # Default fallback (1 THB = 125.78 MMK)
+        sell_mmk_rate = 123.60  # Default fallback (1 MMK = 1/123.60 THB)
 
         if self.settings_service:
-            # User buys MMK: use business sell rate (e.g., 125.78 MMK per THB)
-            thb_to_mmk = (
+            # User buys MMK: use business sell_rate (1 THB = X MMK)
+            buy_mmk_rate = (
                 self.settings_service.sell_rate
                 if self.settings_service.sell_rate > 0
-                else thb_to_mmk
+                else buy_mmk_rate
             )
-            # User sells MMK: use business buy rate, inverted (e.g., 123.6 -> 1/123.6 THB per MMK)
-            mmk_to_thb = (
-                1 / self.settings_service.buy_rate
+            # User sells MMK: use business buy_rate (X MMK = 1 THB, so 1 MMK = 1/X THB)
+            sell_mmk_rate = (
+                self.settings_service.buy_rate
                 if self.settings_service.buy_rate > 0
-                else mmk_to_thb
+                else sell_mmk_rate
             )
 
             logger.debug(
                 "Exchange rates from backend",
                 extra={
-                    "backend_buy": self.settings_service.buy_rate,
-                    "backend_sell": self.settings_service.sell_rate,
-                    "display_thb_to_mmk": thb_to_mmk,
-                    "display_mmk_to_thb": mmk_to_thb,
+                    "backend_buy_rate": self.settings_service.buy_rate,
+                    "backend_sell_rate": self.settings_service.sell_rate,
+                    "display_buy_mmk_rate": buy_mmk_rate,
+                    "display_sell_mmk_rate": sell_mmk_rate,
                 },
             )
 
@@ -239,13 +242,13 @@ class ConversationHandler:
         keyboard = [
             [
                 InlineKeyboardButton(
-                    f"💰 Buy MMK (1 THB = {thb_to_mmk:.2f} MMK)",
+                    f"💰 Buy MMK (1 THB = {buy_mmk_rate:.2f} MMK)",
                     callback_data="action_buy",
                 )
             ],
             [
                 InlineKeyboardButton(
-                    f"💵 Sell MMK (1 MMK = {mmk_to_thb:.6f} THB)",
+                    f"💵 Sell MMK (1 MMK = {1/sell_mmk_rate:.6f} THB)",
                     callback_data="action_sell",
                 )
             ],
@@ -263,8 +266,8 @@ class ConversationHandler:
             if state:
                 telegram_id = str(state.user_id)
                 buttons = {
-                    "action_buy": "💰 Buy MMK (Send THB)",
-                    "action_sell": "💵 Sell MMK (Send MMK)",
+                    "action_buy": f"💰 Buy MMK (1 THB = {buy_mmk_rate:.2f} MMK)",
+                    "action_sell": f"💵 Sell MMK (1 MMK = {1/sell_mmk_rate:.6f} THB)",
                 }
                 await self.message_service.submit_bot_message(
                     telegram_id=telegram_id,
@@ -1523,7 +1526,13 @@ class ConversationHandler:
                         content=success_message,
                     )
 
-                # TODO: In Task 5, send notification to admin group
+                # Send notification to admin group immediately
+                await self._send_admin_notification(
+                    order_id=order_id,
+                    user_id=user_id,
+                    chat_id=chat_id,
+                    state=state
+                )
 
                 logger.info(
                     "Order submitted successfully",
@@ -1764,7 +1773,7 @@ class ConversationHandler:
 
         elif action == "confirm":
             # User confirms and wants to proceed
-            # Show summary and move to user bank selection
+            # Show summary and submit order directly (NO user bank selection needed)
             from app.services.receipt_manager import ReceiptManager
 
             receipt_manager = ReceiptManager()
@@ -1782,10 +1791,19 @@ class ConversationHandler:
 
             await self.bot.send_message(chat_id=chat_id, text=summary)
 
-            # Move to user bank selection
-            await self.show_user_bank_selection(
-                user_id, chat_id, state.order_data.order_type
+            # Submit order directly - admin will handle user bank transfer manually
+            # Set placeholder user bank info
+            self.state_manager.update_state(
+                user_id,
+                user_bank_info="Admin will contact user for bank details"
             )
+            
+            await self.bot.send_message(
+                chat_id=chat_id,
+                text="✅ Submitting your order...\n\nOur admin team will contact you for bank transfer details."
+            )
+            
+            await self.submit_order(user_id, chat_id)
 
         elif action == "restart":
             # User wants to start over
@@ -1834,4 +1852,58 @@ class ConversationHandler:
         else:
             logger.warning(
                 "Unknown receipt action", extra={"user_id": user_id, "action": action}
+            )
+
+    async def _send_admin_notification(
+        self, order_id: str, user_id: int, chat_id: int, state: UserState
+    ) -> None:
+        """
+        Send order notification to admin group immediately after order submission.
+
+        Args:
+            order_id: Order ID
+            user_id: User's Telegram ID
+            chat_id: User's chat ID
+            state: User state with order data
+        """
+        if not self.admin_notifier:
+            logger.warning("AdminNotifier not available, skipping admin notification")
+            return
+
+        try:
+            logger.info(
+                f"📤 Sending admin notification for order {order_id}",
+                extra={"order_id": order_id, "user_id": user_id}
+            )
+
+            # Prepare order data for notification
+            from app.models.order import OrderData
+            
+            order_data = state.order_data
+            
+            # Get user info
+            try:
+                user = await self.bot.get_chat(chat_id)
+                user_name = user.first_name or user.username or str(user_id)
+            except Exception:
+                user_name = str(user_id)
+
+            # Send notification to admin group
+            await self.admin_notifier.send_order_notification(
+                order=order_data,
+                user_telegram_id=str(user_id),
+                user_name=user_name,
+                order_id=order_id
+            )
+
+            logger.info(
+                f"✅ Admin notification sent for order {order_id}",
+                extra={"order_id": order_id, "user_id": user_id}
+            )
+
+        except Exception as e:
+            logger.error(
+                f"❌ Failed to send admin notification for order {order_id}: {e}",
+                extra={"order_id": order_id, "user_id": user_id},
+                exc_info=True
             )

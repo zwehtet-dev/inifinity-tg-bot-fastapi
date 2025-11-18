@@ -50,6 +50,12 @@ class TelegramHandler:
         self.order_service = order_service
         self.settings_service = settings_service
         self.admin_message_handler = admin_message_handler
+        
+        # Get admin_notifier from admin_message_handler if available
+        admin_notifier = None
+        if admin_message_handler and hasattr(admin_message_handler, 'admin_notifier'):
+            admin_notifier = admin_message_handler.admin_notifier
+        
         self.conversation_handler = ConversationHandler(
             bot,
             state_manager,
@@ -57,6 +63,7 @@ class TelegramHandler:
             message_poller,
             order_service,
             settings_service,
+            admin_notifier,
         )
         logger.info("TelegramHandler initialized")
 
