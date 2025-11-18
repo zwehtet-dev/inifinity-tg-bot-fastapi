@@ -233,22 +233,27 @@ class ConversationHandler:
                 },
             )
 
+        # Calculate reverse rates for display
+        buy_reverse_rate = 1 / buy_mmk_rate if buy_mmk_rate > 0 else 0
+        sell_reverse_rate = 1 / sell_mmk_rate if sell_mmk_rate > 0 else 0
+
         welcome_text = (
-            "Welcome to the Infinity Exchange Bot! 🎉\n\n"
-            "This bot helps you exchange THB ↔️ MMK.\n\n"
-            "Choose an option to get started:"
+            "🙏 မင်္ဂလာပါ \n"
+            "Welcome to INFINITY THAI GROUP\n\n"
+            "Please choose an option below\n"
+            "ရွေးချယ်ပါ 👇"
         )
 
         keyboard = [
             [
                 InlineKeyboardButton(
-                    f"💰 Buy MMK (1 THB = {buy_mmk_rate:.2f} MMK)",
+                    f"Buy: {buy_mmk_rate:.2f} ({buy_reverse_rate:.2f}) | ဘတ်ပေးကျပ်ယူ",
                     callback_data="action_buy",
                 )
             ],
             [
                 InlineKeyboardButton(
-                    f"💵 Sell MMK (1 MMK = {1/sell_mmk_rate:.6f} THB)",
+                    f"Sell: {sell_mmk_rate:.2f} ({sell_reverse_rate:.2f}) | ကျပ်ပေးဘတ်ယူ",
                     callback_data="action_sell",
                 )
             ],
@@ -266,8 +271,8 @@ class ConversationHandler:
             if state:
                 telegram_id = str(state.user_id)
                 buttons = {
-                    "action_buy": f"💰 Buy MMK (1 THB = {buy_mmk_rate:.2f} MMK)",
-                    "action_sell": f"💵 Sell MMK (1 MMK = {1/sell_mmk_rate:.6f} THB)",
+                    "action_buy": f"Buy: {buy_mmk_rate:.2f} ({buy_reverse_rate:.2f}) | ဘတ်ပေးကျပ်ယူ",
+                    "action_sell": f"Sell: {sell_mmk_rate:.2f} ({sell_reverse_rate:.2f}) | ကျပ်ပေးဘတ်ယူ",
                 }
                 await self.message_service.submit_bot_message(
                     telegram_id=telegram_id,
