@@ -108,42 +108,53 @@ class AdminNotifier:
             # Format user identification
             user_info = user_name or user_telegram_id
 
-            # Format message - clean and simple
-            message = "🧾 [User sent receipt]\n\n"
+            # Format message - simplified single message format
+            # Format: {order_id}\n{operation} {calculation}\n{user_bank_info}
+            message = ""
             
             # Add order ID if available
             if order_id:
-                message += f"📝 Order: {order_id}\n"
+                message += f"{order_id}\n"
             
-            message += (
-                f"📋 Order Type: {order.order_type.upper()}\n"
-                f"👤 User: {user_info}\n"
-                f"💰 {operation} {calculation}\n"
-            )
+            # Add operation and calculation
+            message += f"{operation} {calculation}\n"
 
             # Add user bank info if available
             if order.user_bank_info:
-                message += f"🏦 User Bank: {order.user_bank_info}\n"
+                message += f"{order.user_bank_info}"
 
             logger.info(
                 f"Sending {order.order_type} order notification to topic {topic_id} "
                 f"for user {user_telegram_id}"
             )
 
-            # Send text message first (NO BUTTONS - staff replies directly)
-            sent_message = await self.bot.send_message(
-                chat_id=self.admin_group_id, message_thread_id=topic_id, text=message
-            )
-
-            # Send receipt images if available
-            if order.receipt_file_ids:
-                await self._send_receipt_images(
-                    topic_id=topic_id,
-                    file_ids=order.receipt_file_ids,
-                    caption=f"Receipt(s) from {user_info}",
+            # Send receipt image with caption containing all info (SINGLE MESSAGE)
+            if order.receipt_file_ids and len(order.receipt_file_ids) > 0:
+                # Send first receipt with caption
+                await self.bot.send_photo(
+                    chat_id=self.admin_group_id,
+                    message_thread_id=topic_id,
+                    photo=order.receipt_file_ids[0],
+                    caption=message,
+                )
+                
+                # Send additional receipts if any (without caption)
+                if len(order.receipt_file_ids) > 1:
+                    for file_id in order.receipt_file_ids[1:]:
+                        await self.bot.send_photo(
+                            chat_id=self.admin_group_id,
+                            message_thread_id=topic_id,
+                            photo=file_id,
+                        )
+            else:
+                # No receipt image, send as text only
+                await self.bot.send_message(
+                    chat_id=self.admin_group_id, 
+                    message_thread_id=topic_id, 
+                    text=message
                 )
 
-            # Send user's bank QR code if provided
+            # Send user's bank QR code if provided (separate message)
             if order.user_bank_qr_file_id:
                 await self.bot.send_photo(
                     chat_id=self.admin_group_id,

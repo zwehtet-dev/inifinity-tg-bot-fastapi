@@ -405,37 +405,62 @@ class ConversationHandler:
             await self.bot.send_message(chat_id=chat_id, text=error_msg)
             return
 
-        # Create header message
+        # Build complete message with all banks in ONE message (bilingual format)
+        # Calculate reverse rate for display
+        if action == "buy":
+            # Buy: 1 THB = X MMK, show as THB (MMK)
+            reverse_rate = 1 / exchange_rate if exchange_rate > 0 else 0
+            rate_text = f"💸 {exchange_rate:.2f} ({reverse_rate:.2f})"
+            action_emoji = "💸"
+            action_burmese = "ဘတ်ပေးကျပ်ယူ"  # Buy MMK (Send THB)
+        else:
+            # Sell: 1 MMK = X THB, show as MMK (THB)
+            reverse_rate = 1 / exchange_rate if exchange_rate > 0 else 0
+            rate_text = f"💸 {reverse_rate:.2f} ({exchange_rate:.6f})"
+            action_emoji = "💸"
+            action_burmese = "ကျပ်ပေးဘတ်ယူ"  # Sell MMK (Send MMK)
+
         message = (
-            f"💰 *{action_text}*\n\n"
-            f"Exchange Rate: {rate_display}\n\n"
-            f"Please transfer to *ANY* of these {bank_type} banks:\n"
+            f"{action_emoji} {rate_text} | {action_burmese}\n\n"
+            f"💳 Please transfer to the following account\n"
+            f"ဒီအကောင့်ထဲလွှဲပါ\n\n"
         )
 
+        # Add all bank details to the message
+        for i, bank in enumerate(active_banks, 1):
+            message += (
+                f"Bank Name: *{bank['bank_name']}*\n"
+                f"Bank Number: `{bank['account_number']}` (click to copy)\n"
+                f"Account Name: {bank['account_name']}\n"
+            )
+            
+            # Add spacing between banks (except after last one)
+            if i < len(active_banks):
+                message += "\n"
+
+        # Add final instruction (bilingual)
+        message += (
+            "\n❗Please provide a screenshot after the transfer, along with your bank account details.\n"
+            "ကျေးဇူးပြု၍ ငွေလွှဲပြီးလျှင် ပုံပို့ပါ၊ ပြီးရင် လက်ခံမည့် ဘဏ်အချက်အလက်ပို့ပါ။❗"
+        )
+
+        # Create Back button
+        keyboard = [[InlineKeyboardButton("🔙 Back", callback_data="action_back")]]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+
+        # Send single consolidated message with Back button
         await self.bot.send_message(
-            chat_id=chat_id, text=message, parse_mode="Markdown"
+            chat_id=chat_id, text=message, parse_mode="Markdown", reply_markup=reply_markup
         )
 
-        # Send each bank's details with QR code
+        # Send QR codes separately (if available) - these are images so must be separate
         for bank in active_banks:
-            bank_message = (
-                f"🏦 *{bank['bank_name']}*\n"
-                f"Account: `{bank['account_number']}`\n"
-                f"Name: {bank['account_name']}"
-            )
-
-            # Send bank details
-            await self.bot.send_message(
-                chat_id=chat_id, text=bank_message, parse_mode="Markdown"
-            )
-
-            # Send QR code if available
             if bank.get("qr_image") and bank["qr_image"].strip():
                 try:
                     await self.bot.send_photo(
                         chat_id=chat_id,
                         photo=bank["qr_image"],
-                        caption=f"💳 Scan to pay to {bank['bank_name']}",
+                        caption=f"💳 {bank['bank_name']} QR Code",
                     )
                     logger.info(
                         f"Sent QR code for bank {bank['bank_name']}",
@@ -446,14 +471,6 @@ class ConversationHandler:
                         f"Failed to send QR code: {e}",
                         extra={"chat_id": chat_id, "bank_id": bank["id"]},
                     )
-
-        # Final instruction
-        instruction_message = (
-            "📸 *After transferring, please send your receipt photo.*"
-        )
-        await self.bot.send_message(
-            chat_id=chat_id, text=instruction_message, parse_mode="Markdown"
-        )
 
         # Submit bot message to backend
         if self.message_service:
@@ -1752,7 +1769,12 @@ class ConversationHandler:
         # Parse callback data
         if callback_data.startswith("action_"):
             action = callback_data.replace("action_", "")
-            await self.handle_choose_action(user_id, chat_id, action)
+            if action == "back":
+                # Handle Back button - return to start menu
+                await self.handle_start(user_id, chat_id)
+            else:
+                # Handle buy/sell actions
+                await self.handle_choose_action(user_id, chat_id, action)
         elif callback_data.startswith("receipt_"):
             # Handle receipt actions (add, confirm, restart, retry)
             action = callback_data.replace("receipt_", "")
