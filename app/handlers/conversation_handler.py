@@ -199,27 +199,27 @@ class ConversationHandler:
             chat_id: Telegram chat ID
         """
         # Get exchange rates from settings service
-        # Backend returns rates from BUSINESS perspective:
-        #   buy_rate = rate business BUYS MMK from user (user sells MMK) - MMK per THB
-        #   sell_rate = rate business SELLS MMK to user (user buys MMK) - MMK per THB
-        # So from USER perspective:
-        #   User buys MMK (sends THB) -> use backend's SELL rate (1 THB = X MMK)
-        #   User sells MMK (sends MMK) -> use backend's BUY rate (1 MMK = 1/X THB)
+        # Backend returns rates from USER perspective:
+        #   buy_rate = rate when user BUYS MMK (sends THB) - 1 THB = X MMK
+        #   sell_rate = rate when user SELLS MMK (sends MMK) - X MMK = 1 THB
+        # Usage:
+        #   User buys MMK (sends THB) -> use buy_rate (1 THB = X MMK)
+        #   User sells MMK (sends MMK) -> use sell_rate (X MMK = 1 THB, so 1 MMK = 1/X THB)
 
         buy_mmk_rate = 125.78  # Default fallback (1 THB = 125.78 MMK)
         sell_mmk_rate = 123.60  # Default fallback (1 MMK = 1/123.60 THB)
 
         if self.settings_service:
-            # User buys MMK: use business sell_rate (1 THB = X MMK)
+            # User buys MMK: use buy_rate (from user perspective)
             buy_mmk_rate = (
-                self.settings_service.sell_rate
-                if self.settings_service.sell_rate > 0
-                else buy_mmk_rate
-            )
-            # User sells MMK: use business buy_rate (X MMK = 1 THB, so 1 MMK = 1/X THB)
-            sell_mmk_rate = (
                 self.settings_service.buy_rate
                 if self.settings_service.buy_rate > 0
+                else buy_mmk_rate
+            )
+            # User sells MMK: use sell_rate (from user perspective)
+            sell_mmk_rate = (
+                self.settings_service.sell_rate
+                if self.settings_service.sell_rate > 0
                 else sell_mmk_rate
             )
 
@@ -321,37 +321,37 @@ class ConversationHandler:
         )
 
         # Fetch exchange rates from backend via settings_service
-        # Backend rates are from BUSINESS perspective:
-        #   buy = rate business BUYS MMK (user sells MMK to business)
-        #   sell = rate business SELLS MMK (user buys MMK from business)
+        # Rates are from USER perspective:
+        #   buy_rate = rate when user BUYS MMK (sends THB)
+        #   sell_rate = rate when user SELLS MMK (sends MMK)
         if self.settings_service:
             if action == "buy":
-                # User buys MMK (sends THB): use business SELL rate
-                # Backend sell rate: 1 THB = X MMK (e.g., 125.78)
-                exchange_rate = self.settings_service.sell_rate
+                # User buys MMK (sends THB): use buy_rate
+                # buy_rate: 1 THB = X MMK (e.g., 125.78)
+                exchange_rate = self.settings_service.buy_rate
                 logger.debug(
                     f"User buy MMK rate: 1 THB = {exchange_rate} MMK",
                     extra={
                         "action": "buy",
                         "rate": exchange_rate,
-                        "backend_sell": self.settings_service.sell_rate,
+                        "backend_buy_rate": self.settings_service.buy_rate,
                     },
                 )
             else:
-                # User sells MMK (sends MMK): use business BUY rate
-                # Backend buy rate: X MMK = 1 THB (e.g., 123.6)
+                # User sells MMK (sends MMK): use sell_rate
+                # sell_rate: X MMK = 1 THB (e.g., 123.6)
                 # So 1 MMK = 1/X THB
                 exchange_rate = (
-                    1 / self.settings_service.buy_rate
-                    if self.settings_service.buy_rate > 0
+                    1 / self.settings_service.sell_rate
+                    if self.settings_service.sell_rate > 0
                     else 0.0035
                 )
                 logger.debug(
-                    f"User sell MMK rate: 1 MMK = {exchange_rate} THB (backend buy: {self.settings_service.buy_rate} MMK = 1 THB)",
+                    f"User sell MMK rate: 1 MMK = {exchange_rate} THB (backend sell_rate: {self.settings_service.sell_rate} MMK = 1 THB)",
                     extra={
                         "action": "sell",
                         "rate": exchange_rate,
-                        "backend_buy": self.settings_service.buy_rate,
+                        "backend_sell_rate": self.settings_service.sell_rate,
                     },
                 )
         else:
