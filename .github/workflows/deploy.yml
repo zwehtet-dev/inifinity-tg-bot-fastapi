@@ -1,11 +1,12 @@
 name: Deploy to Production
 
 on:
-  # Automatic deployment disabled - run manually when ready
-  # push:
-  #   branches: [ main ]
-  #   tags:
-  #     - 'v*'
+  push:
+    branches: [ main ]
+    paths-ignore:
+      - '**.md'
+      - 'docs/**'
+      - '.gitignore'
   workflow_dispatch:
     inputs:
       environment:
@@ -56,7 +57,7 @@ jobs:
         username: ${{ secrets.DEPLOY_USER }}
         key: ${{ secrets.DEPLOY_SSH_KEY }}
         port: ${{ secrets.DEPLOY_PORT || 22 }}
-        envs: GITHUB_TOKEN,GITHUB_ACTOR,IMAGE_NAME
+        envs: GITHUB_TOKEN,GITHUB_ACTOR,IMAGE_NAME,CONTAINER_NAME
         script: |
           cd ${{ secrets.DEPLOY_PATH }}
           
@@ -70,32 +71,32 @@ jobs:
           docker logout ghcr.io
           
           # Stop and remove old container
-          docker stop telegram-bot-fastapi || true
-          docker rm telegram-bot-fastapi || true
+          docker stop "$CONTAINER_NAME" 2>/dev/null || true
+          docker rm "$CONTAINER_NAME" 2>/dev/null || true
           
           # Run new container
           docker run -d \
-            --name telegram-bot-fastapi \
+            --name "$CONTAINER_NAME" \
             --restart unless-stopped \
             -p 8000:8000 \
             --env-file .env \
-            --health-cmd="curl -f http://localhost:8000/health || exit 1" \
-            --health-interval=30s \
-            --health-timeout=10s \
-            --health-retries=3 \
-            --health-start-period=40s \
+            --network host \
             "$IMAGE_NAME"
           
           # Clean up old images
           docker image prune -af --filter "until=24h"
           
-          # Wait for health check
-          sleep 10
-          docker ps | grep telegram-bot-fastapi
+          # Wait for container to start
+          sleep 5
+          
+          # Check container status
+          docker ps | grep "$CONTAINER_NAME"
+          docker logs --tail=50 "$CONTAINER_NAME"
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         GITHUB_ACTOR: ${{ github.actor }}
         IMAGE_NAME: ghcr.io/${{ github.repository }}/fastapi-bot:latest
+        CONTAINER_NAME: telegram-bot-fastapi
 
     - name: Verify deployment
       run: |
