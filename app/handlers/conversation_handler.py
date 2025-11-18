@@ -283,6 +283,7 @@ class ConversationHandler:
     ) -> None:
         """
         Handle buy/sell selection (CHOOSE state handler).
+        SIMPLIFIED: Show all banks directly, no selection needed.
 
         Args:
             user_id: Telegram user ID
@@ -309,9 +310,9 @@ class ConversationHandler:
             await self.show_choose_action(chat_id)
             return
 
-        # Update state with selected action
+        # Update state with selected action - go directly to WAIT_RECEIPT
         self.state_manager.update_state(
-            user_id, new_state=ConversationState.SELECT_PAYMENT_BANK, order_type=action
+            user_id, new_state=ConversationState.WAIT_RECEIPT, order_type=action
         )
 
         # Fetch exchange rates from backend via settings_service
@@ -354,14 +355,15 @@ class ConversationHandler:
 
         self.state_manager.update_state(user_id, exchange_rate=exchange_rate)
 
-        # Show payment bank selection (NEW FLOW)
-        await self.show_payment_bank_selection(chat_id, action, exchange_rate)
+        # SIMPLIFIED: Show ALL banks directly (no selection)
+        await self.show_all_payment_banks(chat_id, action, exchange_rate)
 
-    async def show_payment_bank_selection(
+    async def show_all_payment_banks(
         self, chat_id: int, action: str, exchange_rate: float
     ) -> None:
         """
-        Show bank selection buttons for user to choose which bank to pay to (SELECT_PAYMENT_BANK state).
+        SIMPLIFIED: Show ALL bank accounts at once (no selection needed).
+        User can pay to ANY of the displayed banks.
 
         Args:
             chat_id: Telegram chat ID
@@ -369,7 +371,7 @@ class ConversationHandler:
             exchange_rate: Current exchange rate
         """
         logger.info(
-            "Showing payment bank selection",
+            "Showing all payment banks",
             extra={"chat_id": chat_id, "action": action},
         )
 
@@ -380,18 +382,16 @@ class ConversationHandler:
             if self.settings_service:
                 bank_accounts = self.settings_service.thai_banks
             bank_type = "Thai"
-            currency_send = "THB"
-            currency_receive = "MMK"
             rate_display = f"1 THB = {exchange_rate:.2f} MMK"
+            action_text = "Buy MMK (Send THB)"
         else:  # sell
             # Sell: user sends MMK, so show Myanmar banks
             bank_accounts = []
             if self.settings_service:
                 bank_accounts = self.settings_service.myanmar_banks
             bank_type = "Myanmar"
-            currency_send = "MMK"
-            currency_receive = "THB"
             rate_display = f"1 MMK = {exchange_rate:.6f} THB"
+            action_text = "Sell MMK (Send MMK)"
 
         # Filter active banks
         active_banks = [bank for bank in bank_accounts if bank.get("on", True)]
@@ -399,34 +399,60 @@ class ConversationHandler:
         if not active_banks:
             error_msg = f"❌ No {bank_type} banks available at the moment.\n\nPlease contact admin: @infinityadmin001"
             logger.error(
-                f"No active {bank_type} banks available for payment",
+                f"No active {bank_type} banks available",
                 extra={"chat_id": chat_id, "total_banks": len(bank_accounts)},
             )
             await self.bot.send_message(chat_id=chat_id, text=error_msg)
             return
 
-        # Create message
+        # Create header message
         message = (
-            f"💰 *{'Buy MMK (Send THB)' if action == 'buy' else 'Sell MMK (Send MMK)'}*\n\n"
+            f"💰 *{action_text}*\n\n"
             f"Exchange Rate: {rate_display}\n\n"
-            f"Please select which {bank_type} bank you want to use for payment:"
+            f"Please transfer to *ANY* of these {bank_type} banks:\n"
         )
 
-        # Create inline keyboard with bank buttons (1 per row for clarity)
-        keyboard = []
-        for bank in active_banks:
-            button = InlineKeyboardButton(
-                text=f"🏦 {bank['bank_name']}", callback_data=f"paybank_{bank['id']}"
-            )
-            keyboard.append([button])
-
-        reply_markup = InlineKeyboardMarkup(keyboard)
-
         await self.bot.send_message(
-            chat_id=chat_id,
-            text=message,
-            reply_markup=reply_markup,
-            parse_mode="Markdown",
+            chat_id=chat_id, text=message, parse_mode="Markdown"
+        )
+
+        # Send each bank's details with QR code
+        for bank in active_banks:
+            bank_message = (
+                f"🏦 *{bank['bank_name']}*\n"
+                f"Account: `{bank['account_number']}`\n"
+                f"Name: {bank['account_name']}"
+            )
+
+            # Send bank details
+            await self.bot.send_message(
+                chat_id=chat_id, text=bank_message, parse_mode="Markdown"
+            )
+
+            # Send QR code if available
+            if bank.get("qr_image") and bank["qr_image"].strip():
+                try:
+                    await self.bot.send_photo(
+                        chat_id=chat_id,
+                        photo=bank["qr_image"],
+                        caption=f"💳 Scan to pay to {bank['bank_name']}",
+                    )
+                    logger.info(
+                        f"Sent QR code for bank {bank['bank_name']}",
+                        extra={"chat_id": chat_id, "bank_id": bank["id"]},
+                    )
+                except Exception as e:
+                    logger.warning(
+                        f"Failed to send QR code: {e}",
+                        extra={"chat_id": chat_id, "bank_id": bank["id"]},
+                    )
+
+        # Final instruction
+        instruction_message = (
+            "📸 *After transferring, please send your receipt photo.*"
+        )
+        await self.bot.send_message(
+            chat_id=chat_id, text=instruction_message, parse_mode="Markdown"
         )
 
         # Submit bot message to backend
@@ -434,19 +460,18 @@ class ConversationHandler:
             state = self.state_manager.get_state_by_chat_id(chat_id)
             if state:
                 telegram_id = str(state.user_id)
-                buttons = {
-                    f"paybank_{bank['id']}": f"🏦 {bank['bank_name']}"
-                    for bank in active_banks
-                }
+                full_message = message + "\n\n" + "\n\n".join(
+                    [
+                        f"🏦 {bank['bank_name']}\nAccount: {bank['account_number']}\nName: {bank['account_name']}"
+                        for bank in active_banks
+                    ]
+                )
                 await self.message_service.submit_bot_message(
-                    telegram_id=telegram_id,
-                    chat_id=chat_id,
-                    content=message,
-                    buttons=buttons,
+                    telegram_id=telegram_id, chat_id=chat_id, content=full_message
                 )
 
         logger.debug(
-            f"Showed {len(active_banks)} payment bank options",
+            f"Showed {len(active_banks)} payment banks",
             extra={"chat_id": chat_id, "bank_count": len(active_banks)},
         )
 
@@ -702,46 +727,18 @@ class ConversationHandler:
             logger.warning("No state found for user", extra={"user_id": user_id})
             return
 
-        # Get the selected payment bank for validation (only validate against ONE bank)
+        # SIMPLIFIED: Validate against ALL admin banks (user can pay to any bank)
         admin_banks = []
-        if self.settings_service and state.order_data.selected_payment_bank_id:
-            # Get all banks based on order type
+        if self.settings_service:
             if state.order_data.order_type == "buy":
-                all_banks = self.settings_service.thai_banks
+                admin_banks = self.settings_service.thai_banks
             else:
-                all_banks = self.settings_service.myanmar_banks
-
-            # Filter to only the selected payment bank
-            selected_bank = next(
-                (
-                    b
-                    for b in all_banks
-                    if b["id"] == state.order_data.selected_payment_bank_id
-                ),
-                None,
+                admin_banks = self.settings_service.myanmar_banks
+            
+            logger.info(
+                f"Validating receipt against ALL {state.order_data.order_type} banks",
+                extra={"user_id": user_id, "bank_count": len(admin_banks)},
             )
-            if selected_bank:
-                admin_banks = [selected_bank]
-                logger.info(
-                    f"Validating receipt against selected bank: {selected_bank['bank_name']}",
-                    extra={"user_id": user_id, "bank_id": selected_bank["id"]},
-                )
-            else:
-                logger.error(
-                    f"Selected payment bank not found: {state.order_data.selected_payment_bank_id}",
-                    extra={"user_id": user_id},
-                )
-        else:
-            logger.warning(
-                "No selected payment bank found, falling back to all banks",
-                extra={"user_id": user_id},
-            )
-            # Fallback: validate against all banks (legacy behavior)
-            if self.settings_service:
-                if state.order_data.order_type == "buy":
-                    admin_banks = self.settings_service.thai_banks
-                else:
-                    admin_banks = self.settings_service.myanmar_banks
 
         # Initialize OCR service with admin banks
         from app.services.ocr_service import OCRService
@@ -1071,7 +1068,7 @@ class ConversationHandler:
 
     async def request_user_bank_info(self, chat_id: int, order_type: str) -> None:
         """
-        Request user's bank information (WAIT_USER_BANK state).
+        SIMPLIFIED: Request user's bank information in single-line format.
 
         Args:
             chat_id: Telegram chat ID
@@ -1080,19 +1077,19 @@ class ConversationHandler:
         if order_type == "buy":
             message = (
                 "✅ Receipt verified!\n\n"
-                "Please provide your Myanmar bank account information in this format:\n\n"
-                "*Bank Name - Account Number - Account Holder Name*\n\n"
+                "Please provide your Myanmar bank info in this format:\n\n"
+                "`{account_number} {account_holder_name} {bank_name}`\n\n"
                 "Example:\n"
-                "KBZ Bank - 1234567890 - John Doe\n\n"
+                "`1234567890 John Doe KBZ Bank`\n\n"
                 "We will send MMK to this account."
             )
         else:  # sell
             message = (
                 "✅ Receipt verified!\n\n"
-                "Please provide your Thai bank account information in this format:\n\n"
-                "*Bank Name - Account Number - Account Holder Name*\n\n"
+                "Please provide your Thai bank info in this format:\n\n"
+                "`{account_number} {account_holder_name} {bank_name}`\n\n"
                 "Example:\n"
-                "Bangkok Bank - 123-4-56789-0 - John Doe\n\n"
+                "`123-4-56789-0 John Doe Bangkok Bank`\n\n"
                 "We will send THB to this account."
             )
 
@@ -1354,7 +1351,8 @@ class ConversationHandler:
         self, user_id: int, chat_id: int, bank_info: str
     ) -> None:
         """
-        Handle user bank information submission (WAIT_USER_BANK state handler).
+        SIMPLIFIED: Handle user bank information in single-line format.
+        Format: {account_number} {account_holder_name} {bank_name}
 
         Args:
             user_id: Telegram user ID
@@ -1379,24 +1377,83 @@ class ConversationHandler:
             )
             return
 
-        # Validate bank info format (basic validation)
-        parts = bank_info.split("-")
+        # Parse bank info: {account_number} {account_holder_name} {bank_name}
+        # Example: "1234567890 John Doe KBZ Bank"
+        parts = bank_info.strip().split(maxsplit=2)
+        
         if len(parts) < 3:
+            # Show error with correct format
+            order_type = state.order_data.order_type
+            if order_type == "buy":
+                example = "`1234567890 John Doe KBZ Bank`"
+            else:
+                example = "`123-4-56789-0 John Doe Bangkok Bank`"
+            
             await self.bot.send_message(
                 chat_id=chat_id,
                 text=(
                     "❌ Invalid format.\n\n"
                     "Please use this format:\n"
-                    "*Bank Name - Account Number - Account Holder Name*\n\n"
-                    "Example:\n"
-                    "KBZ Bank - 1234567890 - John Doe"
+                    "`{account_number} {account_holder_name} {bank_name}`\n\n"
+                    f"Example:\n{example}"
                 ),
                 parse_mode="Markdown",
             )
             return
 
+        # Extract components
+        account_number = parts[0]
+        # For name, we need to handle multi-word names
+        # Split remaining text to separate name from bank
+        remaining = parts[1] + " " + parts[2]
+        
+        # Try to identify bank name (last 1-3 words typically)
+        # Simple heuristic: if last word is "Bank", take last 2-3 words as bank name
+        remaining_parts = remaining.split()
+        
+        if len(remaining_parts) < 2:
+            await self.bot.send_message(
+                chat_id=chat_id,
+                text="❌ Please provide both account holder name and bank name.",
+            )
+            return
+        
+        # Assume bank name is last 1-3 words
+        # Check if last word contains "Bank" or common bank keywords
+        bank_keywords = ["Bank", "บัญชี", "ธนาคาร"]
+        bank_word_count = 1
+        
+        for i in range(min(3, len(remaining_parts))):
+            last_words = " ".join(remaining_parts[-(i+1):])
+            if any(keyword in last_words for keyword in bank_keywords):
+                bank_word_count = i + 1
+                break
+        
+        # If no keyword found, assume last 2 words are bank name
+        if bank_word_count == 1 and len(remaining_parts) > 2:
+            bank_word_count = 2
+        
+        account_name = " ".join(remaining_parts[:-bank_word_count])
+        bank_name = " ".join(remaining_parts[-bank_word_count:])
+        
+        # Validate extracted data
+        if not account_number or not account_name or not bank_name:
+            await self.bot.send_message(
+                chat_id=chat_id,
+                text="❌ Could not parse bank information. Please check the format and try again.",
+            )
+            return
+        
+        # Format as standard format for backend
+        formatted_bank_info = f"{bank_name} - {account_number} - {account_name}"
+        
         # Update state with user bank info
-        self.state_manager.update_state(user_id, user_bank_info=bank_info.strip())
+        self.state_manager.update_state(user_id, user_bank_info=formatted_bank_info)
+        
+        logger.info(
+            f"Parsed bank info: {formatted_bank_info}",
+            extra={"user_id": user_id}
+        )
 
         # Submit order
         await self.submit_order(user_id, chat_id)
@@ -1457,16 +1514,16 @@ class ConversationHandler:
             )
 
             # Determine bank IDs based on order type
-            # Use selected_payment_bank_id (bank user paid to) instead of detected_admin_bank_id
+            # SIMPLIFIED: Use detected_admin_bank_id from receipt OCR
             if state.order_data.order_type == "buy":
-                # Buy: user sends THB (selected payment bank), receives MMK (selected by user)
-                thai_bank_id = state.order_data.selected_payment_bank_id
-                myanmar_bank_id = state.order_data.selected_user_bank_id
+                # Buy: user sends THB (detected from receipt), receives MMK (from user input)
+                thai_bank_id = state.order_data.detected_admin_bank_id
+                myanmar_bank_id = None  # Will be parsed from user_bank_info by backend
                 myanmar_bank_name = None
             else:
-                # Sell: user sends MMK (selected payment bank), receives THB (selected by user)
-                thai_bank_id = state.order_data.selected_user_bank_id
-                myanmar_bank_id = state.order_data.selected_payment_bank_id
+                # Sell: user sends MMK (detected from receipt), receives THB (from user input)
+                thai_bank_id = None  # Will be parsed from user_bank_info by backend
+                myanmar_bank_id = state.order_data.detected_admin_bank_id
                 myanmar_bank_name = None
 
             logger.info(
@@ -1696,22 +1753,6 @@ class ConversationHandler:
         if callback_data.startswith("action_"):
             action = callback_data.replace("action_", "")
             await self.handle_choose_action(user_id, chat_id, action)
-        elif callback_data.startswith("paybank_"):
-            # Handle payment bank selection (NEW)
-            try:
-                bank_id = int(callback_data.replace("paybank_", ""))
-                await self.handle_payment_bank_selection(user_id, chat_id, bank_id)
-            except ValueError:
-                logger.error(
-                    f"Invalid payment bank ID in callback data: {callback_data}"
-                )
-        elif callback_data.startswith("bank_"):
-            # Handle user receiving bank selection
-            try:
-                bank_id = int(callback_data.replace("bank_", ""))
-                await self.handle_bank_selection(user_id, chat_id, bank_id)
-            except ValueError:
-                logger.error(f"Invalid bank ID in callback data: {callback_data}")
         elif callback_data.startswith("receipt_"):
             # Handle receipt actions (add, confirm, restart, retry)
             action = callback_data.replace("receipt_", "")
@@ -1773,7 +1814,7 @@ class ConversationHandler:
 
         elif action == "confirm":
             # User confirms and wants to proceed
-            # Show summary and submit order directly (NO user bank selection needed)
+            # SIMPLIFIED: Request user bank info directly (no bank selection buttons)
             from app.services.receipt_manager import ReceiptManager
 
             receipt_manager = ReceiptManager()
@@ -1791,26 +1832,21 @@ class ConversationHandler:
 
             await self.bot.send_message(chat_id=chat_id, text=summary)
 
-            # Submit order directly - admin will handle user bank transfer manually
-            # Set placeholder user bank info
+            # Update state to WAIT_USER_BANK
             self.state_manager.update_state(
                 user_id,
-                user_bank_info="Admin will contact user for bank details"
+                new_state=ConversationState.WAIT_USER_BANK
             )
             
-            await self.bot.send_message(
-                chat_id=chat_id,
-                text="✅ Submitting your order...\n\nOur admin team will contact you for bank transfer details."
-            )
-            
-            await self.submit_order(user_id, chat_id)
+            # Request user bank info directly
+            await self.request_user_bank_info(chat_id, state.order_data.order_type)
 
         elif action == "restart":
             # User wants to start over
-            # Clear all receipts and return to bank selection
+            # Clear all receipts and return to showing all banks
             self.state_manager.update_state(
                 user_id,
-                new_state=ConversationState.SELECT_PAYMENT_BANK,
+                new_state=ConversationState.WAIT_RECEIPT,
                 receipt_file_ids=[],
                 receipt_amounts=[],
                 receipt_bank_ids=[],
@@ -1822,8 +1858,6 @@ class ConversationHandler:
                 thb_amount=None,
                 mmk_amount=None,
                 detected_admin_bank_id=None,
-                selected_payment_bank_id=None,
-                selected_payment_bank_name=None,
                 collected_photos=[],
                 media_group_id=None,
             )
@@ -1832,8 +1866,8 @@ class ConversationHandler:
                 chat_id=chat_id, text="🔄 Starting over...\n\nAll receipts cleared."
             )
 
-            # Show bank selection again
-            await self.show_payment_bank_selection(
+            # Show all banks again
+            await self.show_all_payment_banks(
                 chat_id,
                 state.order_data.order_type,
                 state.order_data.exchange_rate or 0.0,
