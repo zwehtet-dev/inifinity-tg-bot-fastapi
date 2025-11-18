@@ -392,8 +392,9 @@ class AdminMessageHandler:
         Extract order ID from message text/caption.
 
         Looks for patterns:
-        - "Order: 251225A0001B" (preferred format)
-        - "251225A0001B" (fallback)
+        - "251225A0001B" on first line (new simplified format)
+        - "Order: 251225A0001B" (old format)
+        - "251225A0001B" anywhere in text (fallback)
 
         Args:
             message: Message to extract from
@@ -405,20 +406,36 @@ class AdminMessageHandler:
             return None
 
         text = message.text or message.caption or ""
+        
+        if not text:
+            return None
 
-        # Try to find "Order: XXXXXX" format first
+        # Try to find order ID on first line (new simplified format)
+        # Pattern: DDMMYYA####B/S (e.g., 251225A0001B)
+        lines = text.strip().split('\n')
+        if lines:
+            first_line = lines[0].strip()
+            pattern = r"^(\d{6}A\d{4}[BS])$"
+            match = re.match(pattern, first_line)
+            if match:
+                logger.info(f"Found order ID on first line: {match.group(1)}")
+                return match.group(1)
+
+        # Try to find "Order: XXXXXX" format (old format)
         order_pattern = r"Order:\s*(\d{6}A\d{4}[BS])"
         order_match = re.search(order_pattern, text, re.IGNORECASE)
         if order_match:
+            logger.info(f"Found order ID with 'Order:' prefix: {order_match.group(1)}")
             return order_match.group(1)
 
         # Fallback: find order ID pattern anywhere in text
-        # Pattern: DDMMYYA####B/S (e.g., 251225A0001B)
         pattern = r"\d{6}A\d{4}[BS]"
         match = re.search(pattern, text)
         if match:
+            logger.info(f"Found order ID in text: {match.group(0)}")
             return match.group(0)
 
+        logger.warning(f"Could not extract order ID from message: {text[:100]}")
         return None
 
     async def _extract_amount_from_staff_receipt(
