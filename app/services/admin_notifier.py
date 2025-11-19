@@ -90,34 +90,35 @@ class AdminNotifier:
             # Calculate amounts and format operation
             if order.order_type == "buy":
                 # Buy: user sends THB, receives MMK
-                # exchange_rate for buy is stored as MMK per THB (e.g., 125.78)
                 sent_amount = order.thb_amount or 0
                 received_amount = order.mmk_amount or 0
                 sent_currency = "THB"
                 received_currency = "MMK"
                 operation = "Buy"
-                # Display rate as MMK per THB (already in correct format)
-                if order.exchange_rate and order.exchange_rate > 0:
-                    display_rate = order.exchange_rate
+                
+                # Calculate display rate from actual amounts (MMK per THB)
+                # This ensures we always show the correct rate regardless of how it's stored
+                if sent_amount > 0:
+                    display_rate = received_amount / sent_amount
                 else:
-                    # Fallback: calculate from amounts if rate is missing
-                    display_rate = received_amount / sent_amount if sent_amount > 0 else 0
+                    display_rate = order.exchange_rate if order.exchange_rate else 0
+                
                 calculation = f"{sent_amount:,.2f} × {display_rate:.2f} = {received_amount:,.2f}"
             else:
                 # Sell: user sends MMK, receives THB
-                # exchange_rate for sell is stored as THB per MMK (e.g., 0.0081)
-                # Need to invert to display as MMK per THB (e.g., 123.6)
                 sent_amount = order.mmk_amount or 0
                 received_amount = order.thb_amount or 0
                 sent_currency = "MMK"
                 received_currency = "THB"
                 operation = "Sell"
-                # Display rate as MMK per THB (invert the stored rate)
-                if order.exchange_rate and order.exchange_rate > 0:
-                    display_rate = 1 / order.exchange_rate
+                
+                # Calculate display rate from actual amounts (MMK per THB)
+                # For sell, we show how many MMK equals 1 THB
+                if received_amount > 0:
+                    display_rate = sent_amount / received_amount
                 else:
-                    # Fallback: calculate from amounts if rate is missing
-                    display_rate = sent_amount / received_amount if received_amount > 0 else 0
+                    display_rate = 1 / order.exchange_rate if order.exchange_rate and order.exchange_rate > 0 else 0
+                
                 calculation = f"{sent_amount:,.2f} ÷ {display_rate:.2f} = {received_amount:,.2f}"
 
             # Format user identification
