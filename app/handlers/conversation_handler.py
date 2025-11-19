@@ -982,11 +982,19 @@ class ConversationHandler:
                 state.order_data.receipt_amounts
             )
 
-            # Store amount based on order type (for backward compatibility)
+            # Store amount based on order type and calculate the other amount
             if state.order_data.order_type == "buy":
+                # Buy: user sends THB, receives MMK
                 state.order_data.thb_amount = state.order_data.total_amount
+                # Calculate MMK amount using exchange rate
+                if state.order_data.exchange_rate and state.order_data.exchange_rate > 0:
+                    state.order_data.mmk_amount = state.order_data.thb_amount * (1 / state.order_data.exchange_rate)
             else:
+                # Sell: user sends MMK, receives THB
                 state.order_data.mmk_amount = state.order_data.total_amount
+                # Calculate THB amount using exchange rate
+                if state.order_data.exchange_rate and state.order_data.exchange_rate > 0:
+                    state.order_data.thb_amount = state.order_data.mmk_amount * state.order_data.exchange_rate
 
             # Update state
             self.state_manager.update_state(

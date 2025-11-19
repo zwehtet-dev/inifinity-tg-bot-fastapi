@@ -98,7 +98,11 @@ class AdminNotifier:
                 received_currency = "MMK"
                 operation = "Buy"
                 # Display rate as MMK per THB
-                display_rate = (1 / order.exchange_rate) if order.exchange_rate else 0
+                if order.exchange_rate and order.exchange_rate > 0:
+                    display_rate = 1 / order.exchange_rate
+                else:
+                    # Fallback: calculate from amounts if rate is missing
+                    display_rate = received_amount / sent_amount if sent_amount > 0 else 0
                 calculation = f"{sent_amount:,.2f} × {display_rate:.2f} = {received_amount:,.2f}"
             else:
                 # Sell: user sends MMK, receives THB
@@ -110,7 +114,11 @@ class AdminNotifier:
                 received_currency = "THB"
                 operation = "Sell"
                 # Display rate as MMK per THB
-                display_rate = (1 / order.exchange_rate) if order.exchange_rate else 0
+                if order.exchange_rate and order.exchange_rate > 0:
+                    display_rate = 1 / order.exchange_rate
+                else:
+                    # Fallback: calculate from amounts if rate is missing
+                    display_rate = sent_amount / received_amount if received_amount > 0 else 0
                 calculation = f"{sent_amount:,.2f} ÷ {display_rate:.2f} = {received_amount:,.2f}"
 
             # Format user identification
