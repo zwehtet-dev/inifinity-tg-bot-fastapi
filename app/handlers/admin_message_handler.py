@@ -171,6 +171,12 @@ class AdminMessageHandler:
             if order_id:
                 logger.info(f"Found order ID: {order_id}")
 
+            # Extract bank display name from admin's message caption/text
+            admin_message_text = message.caption or message.text or ""
+            admin_bank_display_name = self._extract_bank_display_name(admin_message_text)
+            if admin_bank_display_name:
+                logger.info(f"Admin specified bank: {admin_bank_display_name}")
+
             # Get the original message text/caption to extract expected amount
             original_text = (
                 message.reply_to_message.text or message.reply_to_message.caption or ""
@@ -249,6 +255,21 @@ class AdminMessageHandler:
                         myanmar_bank_id = order_details.get("myanmar_bank_account_id")
                         chat_id = order_details.get("telegram", {}).get("chat_id")
                         exchange_rate = order_details.get("price", 0)
+
+                        # Override bank ID with admin-specified bank (if provided)
+                        if admin_bank_display_name:
+                            admin_bank_id = await self._find_bank_id_by_display_name(
+                                admin_bank_display_name, order_type, expected_currency
+                            )
+                            if admin_bank_id:
+                                if expected_currency == "THB":
+                                    thai_bank_id = admin_bank_id
+                                    logger.info(f"Using admin-specified Thai bank ID: {admin_bank_id}")
+                                else:  # MMK
+                                    myanmar_bank_id = admin_bank_id
+                                    logger.info(f"Using admin-specified Myanmar bank ID: {admin_bank_id}")
+                            else:
+                                logger.warning(f"Could not find bank ID for display name: {admin_bank_display_name}")
 
                         # Update bank balances
                         success = await self._update_bank_balances(
@@ -985,3 +1006,110 @@ If you cannot find a transfer amount, return:
                 f"❌ Error processing complaint: {str(e)}\n"
                 f"Please update status manually."
             )
+
+    def _extract_bank_display_name(self, text: str) -> Optional[str]:
+        """
+        Extract bank display name from admin's message.
+        
+        Admin should include bank name in their message, e.g.:
+        - "SCB" 
+        - "KBZ Special"
+        - "Yoma"
+        
+        Args:
+            text: Message text or caption
+            
+        Returns:
+            Bank display name or None
+        """
+        if not text or not text.strip():
+            return None
+        
+        # Common bank display names to look for
+        # These should match the display_name field in your bank accounts
+        bank_patterns = [
+            "SCB", "Bangkok Bank", "Kasikorn", "Krungsri", "TMB",  # Thai banks
+            "KBZ Special", "KBZ", "AYA Special", "AYA", "Yoma", "CB Special", "CB", "KBZpay",  # Myanmar banks
+        ]
+        
+        text_upper = text.upper().strip()
+        
+        # Try exact match first
+        for pattern in bank_patterns:
+            if pattern.upper() == text_upper:
+                logger.info(f"Found exact bank match: {pattern}")
+                return pattern
+        
+        # Try partial match
+        for pattern in bank_patterns:
+            if pattern.upper() in text_upper:
+                logger.info(f"Found partial bank match: {pattern}")
+                return pattern
+        
+        # If no match, return the text as-is (admin might use custom name)
+        logger.info(f"No standard bank match, using text as-is: {text.strip()}")
+        return text.strip()
+    
+    async def _find_bank_id_by_display_name(
+        self, display_name: str, order_type: str, currency: str
+    ) -> Optional[int]:
+        """
+        Find bank ID by display name from settings service.
+        
+        Args:
+            display_name: Bank display name (e.g., "SCB", "KBZ Special")
+            order_type: "buy" or "sell" to determine which bank list to search
+            currency: "THB" or "MMK" to determine which bank list to search
+            
+        Returns:
+            Bank ID or None if not found
+        """
+        try:
+            from app.services.settings_service import SettingsService
+            from app.config import get_settings
+            
+            # Get settings service to access bank lists
+            settings = get_settings()
+            settings_service = SettingsService(
+                backend_api_url=settings.backend_api_url,
+                backend_api_key=settings.backend_api_key
+            )
+            
+            # Fetch latest bank data
+            await settings_service.fetch_settings()
+            
+            # Determine which bank list to search
+            if currency == "THB":
+                banks = settings_service.thai_banks
+            else:  # MMK
+                banks = settings_service.myanmar_banks
+            
+            # Search for bank by display_name or bank_name
+            display_name_upper = display_name.upper()
+            
+            for bank in banks:
+                bank_display = bank.get("display_name", "").upper()
+                bank_name = bank.get("bank_name", "").upper()
+                
+                # Try exact match first
+                if bank_display == display_name_upper or bank_name == display_name_upper:
+                    bank_id = bank.get("id")
+                    logger.info(f"Found bank ID {bank_id} for '{display_name}' (exact match)")
+                    return bank_id
+            
+            # Try partial match
+            for bank in banks:
+                bank_display = bank.get("display_name", "").upper()
+                bank_name = bank.get("bank_name", "").upper()
+                
+                if display_name_upper in bank_display or display_name_upper in bank_name:
+                    bank_id = bank.get("id")
+                    logger.info(f"Found bank ID {bank_id} for '{display_name}' (partial match)")
+                    return bank_id
+            
+            logger.warning(f"Could not find bank ID for display name: {display_name}")
+            return None
+            
+        except Exception as e:
+            logger.error(f"Error finding bank ID by display name: {e}", exc_info=True)
+            return None
