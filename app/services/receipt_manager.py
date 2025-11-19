@@ -139,6 +139,7 @@ class ReceiptManager:
         bank_name: Optional[str] = None,
         account_number: Optional[str] = None,
         is_first: bool = False,
+        order_type: str = "buy",
     ) -> str:
         """
         Format a message after receipt verification.
@@ -151,27 +152,27 @@ class ReceiptManager:
             bank_name: Bank name (optional, shown for first receipt)
             account_number: Account number (optional, shown for first receipt)
             is_first: Whether this is the first receipt
+            order_type: "buy" or "sell"
 
         Returns:
             Formatted verification message
         """
-        if is_first:
-            message = (
-                f"✅ Receipt {receipt_number} Verified!\n\n"
-                f"🏦 Bank: {bank_name}\n"
-                f"💳 Account: {account_number}\n"
-                f"💵 Amount: {amount:,.2f} {currency}\n\n"
-                f"💰 Total: {total_amount:,.2f} {currency}\n\n"
-                f"What would you like to do next?"
-            )
-        else:
-            message = (
-                f"✅ Receipt {receipt_number} Verified!\n\n"
-                f"💵 Amount: {amount:,.2f} {currency}\n"
-                f"💰 Total: {total_amount:,.2f} {currency}\n\n"
-                f"You have {receipt_number} receipt(s) for a total of {total_amount:,.2f} {currency}.\n\n"
-                f"What would you like to do next?"
-            )
+        # Determine order type text
+        order_type_text = (
+            "Buy MMK (Send THB)" if order_type == "buy" else "Sell MMK (Send MMK)"
+        )
+        
+        # Build order summary message
+        message = (
+            f"📋 Order Summary\n\n"
+            f"Type: {order_type_text}\n"
+            f"📸 Receipts: {receipt_number}\n"
+            f"💰 Total Amount: {total_amount:,.2f} {currency}\n\n"
+            f"Bank Account:\n"
+            f"🏦 {bank_name}\n"
+            f"💳 {account_number}\n\n"
+            f"Ready to submit?"
+        )
 
         return message
 

@@ -1038,6 +1038,7 @@ class ConversationHandler:
                 bank_name=state.order_data.expected_bank_name,
                 account_number=state.order_data.expected_account_number,
                 is_first=is_first_receipt,
+                order_type=state.order_data.order_type,
             )
 
             # Check receipt limit
@@ -1047,6 +1048,13 @@ class ConversationHandler:
 
             # Create action buttons
             keyboard = []
+            keyboard.append(
+                [
+                    InlineKeyboardButton(
+                        "✅ Submit", callback_data="receipt_confirm"
+                    )
+                ]
+            )
             if is_valid:
                 keyboard.append(
                     [
@@ -1055,13 +1063,6 @@ class ConversationHandler:
                         )
                     ]
                 )
-            keyboard.append(
-                [
-                    InlineKeyboardButton(
-                        "✅ Confirm & Submit", callback_data="receipt_confirm"
-                    )
-                ]
-            )
             keyboard.append(
                 [InlineKeyboardButton("🔄 Start Over", callback_data="receipt_restart")]
             )
@@ -1850,25 +1851,7 @@ class ConversationHandler:
             )
 
         elif action == "confirm":
-            # User confirms and wants to proceed
-            # SIMPLIFIED: Request user bank info directly (no bank selection buttons)
-            from app.services.receipt_manager import ReceiptManager
-
-            receipt_manager = ReceiptManager()
-
-            currency = "THB" if state.order_data.order_type == "buy" else "MMK"
-
-            summary = receipt_manager.format_order_summary(
-                order_type=state.order_data.order_type,
-                receipt_count=state.order_data.receipt_count,
-                total_amount=state.order_data.total_amount,
-                currency=currency,
-                bank_name=state.order_data.expected_bank_name or "Unknown",
-                account_number=state.order_data.expected_account_number or "Unknown",
-            )
-
-            await self.bot.send_message(chat_id=chat_id, text=summary)
-
+            # User confirms and wants to proceed - request bank info
             # Update state to WAIT_USER_BANK
             self.state_manager.update_state(
                 user_id,

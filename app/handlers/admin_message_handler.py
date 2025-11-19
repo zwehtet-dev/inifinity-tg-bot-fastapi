@@ -263,19 +263,29 @@ class AdminMessageHandler:
                         exchange_rate = order_details.get("price", 0)
 
                         # Override bank ID with admin-specified bank (if provided)
+                        # For BUY: admin specifies which Thai bank received user's THB
+                        # For SELL: admin specifies which Myanmar bank received user's MMK
                         if admin_bank_display_name:
-                            admin_bank_id = await self._find_bank_id_by_display_name(
-                                admin_bank_display_name, order_type, expected_currency
-                            )
-                            if admin_bank_id:
-                                if expected_currency == "THB":
+                            if order_type == "buy":
+                                # BUY: admin specifies Thai bank (user sent THB to this bank)
+                                admin_bank_id = await self._find_bank_id_by_display_name(
+                                    admin_bank_display_name, order_type, "THB"
+                                )
+                                if admin_bank_id:
                                     thai_bank_id = admin_bank_id
                                     logger.info(f"Using admin-specified Thai bank ID: {admin_bank_id}")
-                                else:  # MMK
+                                else:
+                                    logger.warning(f"Could not find Thai bank ID for display name: {admin_bank_display_name}")
+                            else:
+                                # SELL: admin specifies Myanmar bank (user sent MMK to this bank)
+                                admin_bank_id = await self._find_bank_id_by_display_name(
+                                    admin_bank_display_name, order_type, "MMK"
+                                )
+                                if admin_bank_id:
                                     myanmar_bank_id = admin_bank_id
                                     logger.info(f"Using admin-specified Myanmar bank ID: {admin_bank_id}")
-                            else:
-                                logger.warning(f"Could not find bank ID for display name: {admin_bank_display_name}")
+                                else:
+                                    logger.warning(f"Could not find Myanmar bank ID for display name: {admin_bank_display_name}")
 
                         # Update bank balances
                         success = await self._update_bank_balances(
