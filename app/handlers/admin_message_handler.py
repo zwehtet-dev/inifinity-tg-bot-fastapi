@@ -1278,10 +1278,13 @@ If you cannot find a transfer amount, return:
                     f"Please specify which {expected_bank_list} bank you used to send {expected_currency}.\n\n"
                 )
             
-            # Add available banks
+            # Add available banks (show display_name, not bank_name)
             error_msg += f"Available {expected_bank_list} banks:\n"
             for bank in banks:
-                display_name = bank.get("display_name") or bank.get("bank_name")
+                # Prioritize display_name, only use bank_name if display_name is empty
+                display_name = bank.get("display_name", "").strip()
+                if not display_name:
+                    display_name = bank.get("bank_name", "Unknown")
                 error_msg += f"• {display_name}\n"
             
             error_msg += (
