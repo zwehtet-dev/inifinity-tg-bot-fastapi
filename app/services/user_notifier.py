@@ -76,17 +76,22 @@ class UserNotifier:
             # SELL: User sends MMK, receives THB -> MMK ÷ rate = THB
             if order_type == "buy":
                 # Buy: THB × rate = MMK
-                # Example: Buy 1,620 × 123.76 = 200,000
+                # exchange_rate is MMK per THB (e.g., 123.76)
+                # Example: Buy 1,620.00 × 123.76 = 200,471.20
                 message = (
                     f"Buy {sent_amount:,.2f} × {exchange_rate:.2f} = "
-                    f"{received_amount:,.0f}"
+                    f"{received_amount:,.2f}"
                 )
             else:
                 # Sell: MMK ÷ rate = THB
-                # Example: Sell 4,950,500.00 ÷ 123.76 = 40,000
+                # exchange_rate might be THB per MMK (e.g., 0.0081)
+                # We need to show MMK per THB (e.g., 123.76)
+                # So invert if rate < 1
+                display_rate = 1 / exchange_rate if exchange_rate > 0 and exchange_rate < 1 else exchange_rate
+                # Example: Sell 4,950,500.00 ÷ 123.76 = 40,000.81
                 message = (
-                    f"Sell {sent_amount:,.2f} ÷ {exchange_rate:.2f} = "
-                    f"{received_amount:,.0f}"
+                    f"Sell {sent_amount:,.2f} ÷ {display_rate:.2f} = "
+                    f"{received_amount:,.2f}"
                 )
 
             logger.info(
