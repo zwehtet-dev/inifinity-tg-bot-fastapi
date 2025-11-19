@@ -178,6 +178,7 @@ async def lifespan(app: FastAPI):
         admin_notifier=admin_notifier,
         user_notifier=user_notifier,
         backend_api_url=settings.backend_api_url,
+        backend_webhook_secret=settings.backend_webhook_secret,
         settings_service=settings_service,
     )
     app.state.admin_message_handler = admin_message_handler

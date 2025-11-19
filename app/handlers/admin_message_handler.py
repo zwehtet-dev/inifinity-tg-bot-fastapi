@@ -36,6 +36,7 @@ class AdminMessageHandler:
         admin_notifier: AdminNotifier,
         user_notifier: UserNotifier,
         backend_api_url: str,
+        backend_webhook_secret: str,
         settings_service=None,
     ):
         """
@@ -51,6 +52,7 @@ class AdminMessageHandler:
             admin_notifier: Service for sending admin notifications
             user_notifier: Service for sending user notifications
             backend_api_url: Backend API URL for fetching order details
+            backend_webhook_secret: Backend webhook secret for API authentication
             settings_service: Settings service for accessing bank data (optional)
         """
         self.bot = bot
@@ -62,6 +64,7 @@ class AdminMessageHandler:
         self.admin_notifier = admin_notifier
         self.user_notifier = user_notifier
         self.backend_api_url = backend_api_url.rstrip("/")
+        self.backend_webhook_secret = backend_webhook_secret
         self.settings_service = settings_service
         logger.info("AdminMessageHandler initialized")
 
@@ -621,9 +624,12 @@ If you cannot find a transfer amount, return:
         try:
             import aiohttp
 
+            headers = {"X-Backend-Secret": self.backend_webhook_secret}
+
             async with aiohttp.ClientSession() as session:
                 async with session.get(
                     f"{self.backend_api_url}/api/orders/{order_id}",
+                    headers=headers,
                     timeout=aiohttp.ClientTimeout(total=10),
                 ) as response:
                     if response.status == 200:
@@ -665,11 +671,14 @@ If you cannot find a transfer amount, return:
                 content_type="image/jpeg",
             )
 
+            headers = {"X-Backend-Secret": self.backend_webhook_secret}
+
             # Upload to backend
             async with aiohttp.ClientSession() as session:
                 async with session.post(
                     f"{self.backend_api_url}/api/orders/{order_id}/confirm-receipt",
                     data=data,
+                    headers=headers,
                     timeout=aiohttp.ClientTimeout(total=30),
                 ) as response:
                     if response.status == 200:
@@ -752,10 +761,16 @@ If you cannot find a transfer amount, return:
             logger.info(f"   Thai bank ID: {thai_bank_id}")
             logger.info(f"   Myanmar bank ID: {myanmar_bank_id}")
 
+            headers = {
+                "X-Backend-Secret": self.backend_webhook_secret,
+                "Content-Type": "application/json",
+            }
+
             async with aiohttp.ClientSession() as session:
                 async with session.post(
                     f"{self.backend_api_url}/api/banks/update-balance",
                     json=payload,
+                    headers=headers,
                     timeout=aiohttp.ClientTimeout(total=10),
                 ) as response:
                     if response.status in [200, 201]:
@@ -787,6 +802,11 @@ If you cannot find a transfer amount, return:
             import aiohttp
 
             payload = {"status": status}
+            
+            headers = {
+                "X-Backend-Secret": self.backend_webhook_secret,
+                "Content-Type": "application/json",
+            }
 
             logger.info(f"📝 Updating order {order_id} status to: {status}")
 
@@ -794,6 +814,7 @@ If you cannot find a transfer amount, return:
                 async with session.patch(
                     f"{self.backend_api_url}/api/orders/{order_id}/status",
                     json=payload,
+                    headers=headers,
                     timeout=aiohttp.ClientTimeout(total=10),
                 ) as response:
                     if response.status in [200, 201]:
