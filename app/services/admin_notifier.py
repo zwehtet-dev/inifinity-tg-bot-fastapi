@@ -90,20 +90,28 @@ class AdminNotifier:
             # Calculate amounts and format operation
             if order.order_type == "buy":
                 # Buy: user sends THB, receives MMK
+                # exchange_rate is stored as THB per MMK (e.g., 0.0035)
+                # Display as MMK per THB for clarity (e.g., 285.71)
                 sent_amount = order.thb_amount or 0
-                received_amount = sent_amount * (order.exchange_rate or 0)
+                received_amount = order.mmk_amount or 0
                 sent_currency = "THB"
                 received_currency = "MMK"
                 operation = "Buy"
-                calculation = f"{sent_amount:,.2f} × {order.exchange_rate:.2f} = {received_amount:,.2f}"
+                # Display rate as MMK per THB
+                display_rate = (1 / order.exchange_rate) if order.exchange_rate else 0
+                calculation = f"{sent_amount:,.2f} × {display_rate:.2f} = {received_amount:,.2f}"
             else:
                 # Sell: user sends MMK, receives THB
+                # exchange_rate is stored as THB per MMK (e.g., 0.0035)
+                # Display as MMK per THB for clarity (e.g., 285.71)
                 sent_amount = order.mmk_amount or 0
-                received_amount = sent_amount / (order.exchange_rate or 1)
+                received_amount = order.thb_amount or 0
                 sent_currency = "MMK"
                 received_currency = "THB"
                 operation = "Sell"
-                calculation = f"{sent_amount:,.2f} ÷ {order.exchange_rate:.2f} = {received_amount:,.2f}"
+                # Display rate as MMK per THB
+                display_rate = (1 / order.exchange_rate) if order.exchange_rate else 0
+                calculation = f"{sent_amount:,.2f} ÷ {display_rate:.2f} = {received_amount:,.2f}"
 
             # Format user identification
             user_info = user_name or user_telegram_id
