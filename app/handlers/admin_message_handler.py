@@ -268,6 +268,34 @@ class AdminMessageHandler:
                         myanmar_bank_id = order_details.get("myanmar_bank_account_id")
                         chat_id = order_details.get("telegram", {}).get("chat_id")
                         exchange_rate = order_details.get("price", 0)
+                        
+                        # Log the bank IDs from order
+                        logger.info(
+                            f"📋 Bank IDs from order {order_id}:",
+                            extra={
+                                "order_id": order_id,
+                                "thai_bank_id": thai_bank_id,
+                                "myanmar_bank_id": myanmar_bank_id,
+                                "order_type": order_type
+                            }
+                        )
+                        
+                        # Validate bank IDs
+                        if order_type == "buy" and not thai_bank_id:
+                            logger.error(f"❌ BUY order {order_id} missing thai_bank_id!")
+                            await message.reply_text(
+                                f"⚠️ Order {order_id} is missing Thai bank ID.\n"
+                                "Cannot update balances. Please update manually."
+                            )
+                            return
+                        
+                        if order_type == "sell" and not myanmar_bank_id:
+                            logger.error(f"❌ SELL order {order_id} missing myanmar_bank_id!")
+                            await message.reply_text(
+                                f"⚠️ Order {order_id} is missing Myanmar bank ID.\n"
+                                "Cannot update balances. Please update manually."
+                            )
+                            return
 
                         # Validate and process admin-specified bank display name
                         # For BUY: admin specifies which Myanmar bank to send MMK from
