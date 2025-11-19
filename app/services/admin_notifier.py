@@ -90,30 +90,29 @@ class AdminNotifier:
             # Calculate amounts and format operation
             if order.order_type == "buy":
                 # Buy: user sends THB, receives MMK
-                # exchange_rate is stored as THB per MMK (e.g., 0.0035)
-                # Display as MMK per THB for clarity (e.g., 285.71)
+                # exchange_rate for buy is stored as MMK per THB (e.g., 125.78)
                 sent_amount = order.thb_amount or 0
                 received_amount = order.mmk_amount or 0
                 sent_currency = "THB"
                 received_currency = "MMK"
                 operation = "Buy"
-                # Display rate as MMK per THB
+                # Display rate as MMK per THB (already in correct format)
                 if order.exchange_rate and order.exchange_rate > 0:
-                    display_rate = 1 / order.exchange_rate
+                    display_rate = order.exchange_rate
                 else:
                     # Fallback: calculate from amounts if rate is missing
                     display_rate = received_amount / sent_amount if sent_amount > 0 else 0
                 calculation = f"{sent_amount:,.2f} × {display_rate:.2f} = {received_amount:,.2f}"
             else:
                 # Sell: user sends MMK, receives THB
-                # exchange_rate is stored as THB per MMK (e.g., 0.0035)
-                # Display as MMK per THB for clarity (e.g., 285.71)
+                # exchange_rate for sell is stored as THB per MMK (e.g., 0.0081)
+                # Need to invert to display as MMK per THB (e.g., 123.6)
                 sent_amount = order.mmk_amount or 0
                 received_amount = order.thb_amount or 0
                 sent_currency = "MMK"
                 received_currency = "THB"
                 operation = "Sell"
-                # Display rate as MMK per THB
+                # Display rate as MMK per THB (invert the stored rate)
                 if order.exchange_rate and order.exchange_rate > 0:
                     display_rate = 1 / order.exchange_rate
                 else:

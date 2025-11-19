@@ -985,14 +985,16 @@ class ConversationHandler:
             # Store amount based on order type and calculate the other amount
             if state.order_data.order_type == "buy":
                 # Buy: user sends THB, receives MMK
+                # exchange_rate for buy is stored as MMK per THB (e.g., 125.78)
                 state.order_data.thb_amount = state.order_data.total_amount
-                # Calculate MMK amount using exchange rate
+                # Calculate MMK amount: THB × (MMK per THB)
                 if state.order_data.exchange_rate and state.order_data.exchange_rate > 0:
-                    state.order_data.mmk_amount = state.order_data.thb_amount * (1 / state.order_data.exchange_rate)
+                    state.order_data.mmk_amount = state.order_data.thb_amount * state.order_data.exchange_rate
             else:
                 # Sell: user sends MMK, receives THB
+                # exchange_rate for sell is stored as THB per MMK (e.g., 0.0081)
                 state.order_data.mmk_amount = state.order_data.total_amount
-                # Calculate THB amount using exchange rate
+                # Calculate THB amount: MMK × (THB per MMK)
                 if state.order_data.exchange_rate and state.order_data.exchange_rate > 0:
                     state.order_data.thb_amount = state.order_data.mmk_amount * state.order_data.exchange_rate
 
