@@ -894,6 +894,8 @@ If you cannot find a transfer amount, return:
             logger.info(f"   Myanmar bank change: {myanmar_change:+,.2f}")
             logger.info(f"   Thai bank ID: {thai_bank_id}")
             logger.info(f"   Myanmar bank ID: {myanmar_bank_id}")
+            logger.info(f"   Payload: {payload}")
+            logger.info(f"   API URL: {self.backend_api_url}/api/banks/update-balance")
 
             headers = {
                 "X-Backend-Secret": self.backend_webhook_secret,
@@ -908,12 +910,20 @@ If you cannot find a transfer amount, return:
                     timeout=aiohttp.ClientTimeout(total=10),
                 ) as response:
                     if response.status in [200, 201]:
+                        response_data = await response.json()
                         logger.info(f"✅ Bank balances updated for order {order_id}")
+                        logger.info(f"   Backend response: {response_data}")
                         return True
                     else:
                         error_text = await response.text()
                         logger.error(
-                            f"Failed to update bank balances: {response.status} - {error_text}"
+                            f"❌ Failed to update bank balances: {response.status} - {error_text}",
+                            extra={
+                                "order_id": order_id,
+                                "status_code": response.status,
+                                "payload": payload,
+                                "error": error_text
+                            }
                         )
                         return False
 
