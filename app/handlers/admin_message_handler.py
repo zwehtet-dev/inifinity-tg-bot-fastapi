@@ -180,8 +180,15 @@ class AdminMessageHandler:
             # Extract bank display name from admin's message caption/text
             admin_message_text = message.caption or message.text or ""
             admin_bank_display_name = self._extract_bank_display_name(admin_message_text)
+            
+            # Track if we need to request display name confirmation
+            needs_display_name_confirmation = False
+            
             if admin_bank_display_name:
                 logger.info(f"Admin specified bank: {admin_bank_display_name}")
+            else:
+                logger.warning("Admin did not specify bank display name in message")
+                needs_display_name_confirmation = True
 
             # Get the original message text/caption to extract expected amount
             original_text = (
@@ -262,31 +269,90 @@ class AdminMessageHandler:
                         chat_id = order_details.get("telegram", {}).get("chat_id")
                         exchange_rate = order_details.get("price", 0)
 
-                        # Override bank ID with admin-specified bank (if provided)
-                        # For BUY: admin specifies which Thai bank received user's THB
-                        # For SELL: admin specifies which Myanmar bank received user's MMK
-                        if admin_bank_display_name:
-                            if order_type == "buy":
-                                # BUY: admin specifies Thai bank (user sent THB to this bank)
-                                admin_bank_id = await self._find_bank_id_by_display_name(
-                                    admin_bank_display_name, order_type, "THB"
-                                )
-                                if admin_bank_id:
-                                    thai_bank_id = admin_bank_id
-                                    logger.info(f"Using admin-specified Thai bank ID: {admin_bank_id}")
-                                else:
-                                    logger.warning(f"Could not find Thai bank ID for display name: {admin_bank_display_name}")
-                            else:
-                                # SELL: admin specifies Myanmar bank (user sent MMK to this bank)
-                                admin_bank_id = await self._find_bank_id_by_display_name(
-                                    admin_bank_display_name, order_type, "MMK"
-                                )
-                                if admin_bank_id:
+                        # Validate and process admin-specified bank display name
+                        # For BUY: admin specifies which Myanmar bank to send MMK from
+                        # For SELL: admin specifies which Thai bank to send THB from
+                        
+                        # Determine which bank list to validate against
+                        if order_type == "buy":
+                            # BUY: admin sends MMK, so validate against Myanmar banks
+                            validation_currency = "MMK"
+                            validation_bank_list = "Myanmar"
+                        else:
+                            # SELL: admin sends THB, so validate against Thai banks
+                            validation_currency = "THB"
+                            validation_bank_list = "Thai"
+                        
+                        # If admin provided display name, validate it
+                        if admin_bank_display_name and not needs_display_name_confirmation:
+                            admin_bank_id = await self._find_bank_id_by_display_name(
+                                admin_bank_display_name, order_type, validation_currency
+                            )
+                            
+                            if admin_bank_id:
+                                # Valid bank found
+                                if order_type == "buy":
+                                    # BUY: admin sends MMK from this Myanmar bank
                                     myanmar_bank_id = admin_bank_id
-                                    logger.info(f"Using admin-specified Myanmar bank ID: {admin_bank_id}")
+                                    logger.info(f"✅ Using admin-specified Myanmar bank ID: {admin_bank_id} ({admin_bank_display_name})")
                                 else:
-                                    logger.warning(f"Could not find Myanmar bank ID for display name: {admin_bank_display_name}")
+                                    # SELL: admin sends THB from this Thai bank
+                                    thai_bank_id = admin_bank_id
+                                    logger.info(f"✅ Using admin-specified Thai bank ID: {admin_bank_id} ({admin_bank_display_name})")
+                            else:
+                                # Display name not found in bank list - request confirmation
+                                logger.warning(f"❌ Display name '{admin_bank_display_name}' not found in {validation_bank_list} banks")
+                                needs_display_name_confirmation = True
+                        
+                        # If we need display name confirmation, request it from admin
+                        if needs_display_name_confirmation:
+                            await self._request_display_name_confirmation(
+                                message=message,
+                                order_id=order_id,
+                                order_type=order_type,
+                                provided_name=admin_bank_display_name,
+                                expected_currency=validation_currency,
+                                expected_bank_list=validation_bank_list
+                            )
+                            return  # Stop processing until admin confirms
 
+                        # Determine which bank to reduce (admin sends from) and which to increase (user sent to)
+                        # For BUY: User sent THB to thai_bank_id (from order), Admin sends MMK from myanmar_bank_id (admin specified)
+                        # For SELL: User sent MMK to myanmar_bank_id (from order), Admin sends THB from thai_bank_id (admin specified)
+                        
+                        if order_type == "buy":
+                            # BUY: Increase Thai bank (user sent THB), Decrease Myanmar bank (admin sends MMK)
+                            bank_to_increase_id = thai_bank_id  # Thai bank from order (user sent THB here)
+                            bank_to_increase_amount = user_sent_amount
+                            bank_to_increase_currency = "THB"
+                            
+                            bank_to_decrease_id = myanmar_bank_id  # Myanmar bank admin specified (admin sends MMK from here)
+                            bank_to_decrease_amount = staff_sent_amount
+                            bank_to_decrease_currency = "MMK"
+                        else:
+                            # SELL: Increase Myanmar bank (user sent MMK), Decrease Thai bank (admin sends THB)
+                            bank_to_increase_id = myanmar_bank_id  # Myanmar bank from order (user sent MMK here)
+                            bank_to_increase_amount = user_sent_amount
+                            bank_to_increase_currency = "MMK"
+                            
+                            bank_to_decrease_id = thai_bank_id  # Thai bank admin specified (admin sends THB from here)
+                            bank_to_decrease_amount = staff_sent_amount
+                            bank_to_decrease_currency = "THB"
+                        
+                        logger.info(
+                            f"💰 Balance adjustment for {order_type.upper()} order {order_id}:",
+                            extra={
+                                "order_id": order_id,
+                                "order_type": order_type,
+                                "increase_bank_id": bank_to_increase_id,
+                                "increase_amount": bank_to_increase_amount,
+                                "increase_currency": bank_to_increase_currency,
+                                "decrease_bank_id": bank_to_decrease_id,
+                                "decrease_amount": bank_to_decrease_amount,
+                                "decrease_currency": bank_to_decrease_currency
+                            }
+                        )
+                        
                         # Update bank balances
                         success = await self._update_bank_balances(
                             order_id=order_id,
@@ -317,10 +383,40 @@ class AdminMessageHandler:
                                 "Please update order status to 'approved' manually."
                             )
 
-                        # Send balance notification
+                        # Send balance notification with update details
                         myanmar_banks, thai_banks, balances = (
                             await self.order_completion_service.fetch_all_banks_with_balances()
                         )
+                        
+                        # Build balance update message
+                        balance_update_msg = (
+                            f"💰 Balance Updated - Order {order_id}\n\n"
+                            f"Type: {order_type.upper()}\n"
+                        )
+                        
+                        if order_type == "buy":
+                            # BUY: User sent THB, Admin sent MMK
+                            balance_update_msg += (
+                                f"✅ Thai Bank +{user_sent_amount:,.2f} THB (user payment received)\n"
+                                f"➖ Myanmar Bank -{staff_sent_amount:,.2f} MMK (sent to user)\n"
+                            )
+                        else:
+                            # SELL: User sent MMK, Admin sent THB
+                            balance_update_msg += (
+                                f"✅ Myanmar Bank +{user_sent_amount:,.2f} MMK (user payment received)\n"
+                                f"➖ Thai Bank -{staff_sent_amount:,.2f} THB (sent to user)\n"
+                            )
+                        
+                        balance_update_msg += "\n📊 Current Balances:\n"
+                        
+                        # Send balance update notification to admin group
+                        await self.bot.send_message(
+                            chat_id=self.admin_group_id,
+                            text=balance_update_msg,
+                            message_thread_id=message.message_thread_id
+                        )
+                        
+                        # Send full balance notification
                         await self.admin_notifier.send_balance_notification(
                             myanmar_banks=myanmar_banks,
                             thai_banks=thai_banks,
@@ -1139,3 +1235,74 @@ If you cannot find a transfer amount, return:
         except Exception as e:
             logger.error(f"Error finding bank ID by display name: {e}", exc_info=True)
             return None
+    
+    async def _request_display_name_confirmation(
+        self,
+        message: Message,
+        order_id: str,
+        order_type: str,
+        provided_name: Optional[str],
+        expected_currency: str,
+        expected_bank_list: str
+    ) -> None:
+        """
+        Request admin to confirm which bank display name to use.
+        
+        Args:
+            message: Admin's message
+            order_id: Order ID
+            order_type: "buy" or "sell"
+            provided_name: Display name provided by admin (if any)
+            expected_currency: Expected currency (THB or MMK)
+            expected_bank_list: Expected bank list name (Thai or Myanmar)
+        """
+        try:
+            # Get available banks
+            if expected_currency == "THB":
+                banks = self.settings_service.thai_banks if self.settings_service else []
+            else:
+                banks = self.settings_service.myanmar_banks if self.settings_service else []
+            
+            # Build message
+            if provided_name:
+                error_msg = (
+                    f"❌ Display Name Not Found\n\n"
+                    f"Order: {order_id}\n"
+                    f"You sent: '{provided_name}'\n\n"
+                    f"This display name is not found in {expected_bank_list} banks.\n\n"
+                )
+            else:
+                error_msg = (
+                    f"❌ Display Name Required\n\n"
+                    f"Order: {order_id}\n\n"
+                    f"Please specify which {expected_bank_list} bank you used to send {expected_currency}.\n\n"
+                )
+            
+            # Add available banks
+            error_msg += f"Available {expected_bank_list} banks:\n"
+            for bank in banks:
+                display_name = bank.get("display_name") or bank.get("bank_name")
+                error_msg += f"• {display_name}\n"
+            
+            error_msg += (
+                f"\n📝 Please reply to this message with the correct display name.\n"
+                f"Example: Reply with 'SCB' or 'KBZ Special'"
+            )
+            
+            await message.reply_text(error_msg)
+            
+            logger.info(
+                f"Requested display name confirmation for order {order_id}",
+                extra={
+                    "order_id": order_id,
+                    "provided_name": provided_name,
+                    "expected_currency": expected_currency
+                }
+            )
+            
+        except Exception as e:
+            logger.error(f"Error requesting display name confirmation: {e}", exc_info=True)
+            await message.reply_text(
+                f"❌ Error: Could not process receipt.\n"
+                f"Please include bank display name in your message and try again."
+            )
