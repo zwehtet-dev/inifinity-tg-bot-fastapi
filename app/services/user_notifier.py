@@ -71,20 +71,23 @@ class UserNotifier:
             UserNotificationError: If notification fails
         """
         try:
-            # Determine operation symbol based on order type and exchange rate
+            # Format success message with exchange rate calculation
+            # BUY: User sends THB, receives MMK -> THB × rate = MMK
+            # SELL: User sends MMK, receives THB -> MMK ÷ rate = THB
             if order_type == "buy":
-                # Buy: THB to MMK
-                operation_symbol = "÷" if exchange_rate < 1 else "×"
+                # Buy: THB × rate = MMK
+                # Example: Buy 1,620 × 123.76 = 200,000
+                message = (
+                    f"Buy {sent_amount:,.2f} × {exchange_rate:.2f} = "
+                    f"{received_amount:,.0f}"
+                )
             else:
-                # Sell: MMK to THB
-                operation_symbol = "×" if exchange_rate < 1 else "÷"
-
-            # Format success message with exchange rate calculation (without currency suffixes, no decimals)
-            message = (
-                f"{'Buy' if order_type == 'buy' else 'Sell'} "
-                f"{sent_amount:,.0f} {operation_symbol} {exchange_rate:.2f} = "
-                f"{received_amount:,.0f}"
-            )
+                # Sell: MMK ÷ rate = THB
+                # Example: Sell 4,950,500.00 ÷ 123.76 = 40,000
+                message = (
+                    f"Sell {sent_amount:,.2f} ÷ {exchange_rate:.2f} = "
+                    f"{received_amount:,.0f}"
+                )
 
             logger.info(
                 f"📤 Sending success notification to user {user_id}",

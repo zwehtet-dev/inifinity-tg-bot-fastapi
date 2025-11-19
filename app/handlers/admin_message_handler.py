@@ -411,40 +411,12 @@ class AdminMessageHandler:
                                 "Please update order status to 'approved' manually."
                             )
 
-                        # Send balance notification with update details
+                        # Send balance notification (silent - no update message)
                         myanmar_banks, thai_banks, balances = (
                             await self.order_completion_service.fetch_all_banks_with_balances()
                         )
                         
-                        # Build balance update message
-                        balance_update_msg = (
-                            f"💰 Balance Updated - Order {order_id}\n\n"
-                            f"Type: {order_type.upper()}\n"
-                        )
-                        
-                        if order_type == "buy":
-                            # BUY: User sent THB, Admin sent MMK
-                            balance_update_msg += (
-                                f"✅ Thai Bank +{user_sent_amount:,.2f} THB (user payment received)\n"
-                                f"➖ Myanmar Bank -{staff_sent_amount:,.2f} MMK (sent to user)\n"
-                            )
-                        else:
-                            # SELL: User sent MMK, Admin sent THB
-                            balance_update_msg += (
-                                f"✅ Myanmar Bank +{user_sent_amount:,.2f} MMK (user payment received)\n"
-                                f"➖ Thai Bank -{staff_sent_amount:,.2f} THB (sent to user)\n"
-                            )
-                        
-                        balance_update_msg += "\n📊 Current Balances:\n"
-                        
-                        # Send balance update notification to admin group
-                        await self.bot.send_message(
-                            chat_id=self.admin_group_id,
-                            text=balance_update_msg,
-                            message_thread_id=message.message_thread_id
-                        )
-                        
-                        # Send full balance notification
+                        # Send full balance notification only
                         await self.admin_notifier.send_balance_notification(
                             myanmar_banks=myanmar_banks,
                             thai_banks=thai_banks,
@@ -1301,34 +1273,11 @@ If you cannot find a transfer amount, return:
             else:
                 banks = self.settings_service.myanmar_banks if self.settings_service else []
             
-            # Build message
+            # Build short error message
             if provided_name:
-                error_msg = (
-                    f"❌ Display Name Not Found\n\n"
-                    f"Order: {order_id}\n"
-                    f"You sent: '{provided_name}'\n\n"
-                    f"This display name is not found in {expected_bank_list} banks.\n\n"
-                )
+                error_msg = f"❌ Display Name Not Found"
             else:
-                error_msg = (
-                    f"❌ Display Name Required\n\n"
-                    f"Order: {order_id}\n\n"
-                    f"Please specify which {expected_bank_list} bank you used to send {expected_currency}.\n\n"
-                )
-            
-            # Add available banks (show display_name, not bank_name)
-            error_msg += f"Available {expected_bank_list} banks:\n"
-            for bank in banks:
-                # Prioritize display_name, only use bank_name if display_name is empty
-                display_name = bank.get("display_name", "").strip()
-                if not display_name:
-                    display_name = bank.get("bank_name", "Unknown")
-                error_msg += f"• {display_name}\n"
-            
-            error_msg += (
-                f"\n📝 Please reply to this message with the correct display name.\n"
-                f"Example: Reply with 'SCB' or 'KBZ Special'"
-            )
+                error_msg = f"❌ Display Name Required"
             
             await message.reply_text(error_msg)
             
