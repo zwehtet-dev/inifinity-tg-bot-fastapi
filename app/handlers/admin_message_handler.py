@@ -36,6 +36,7 @@ class AdminMessageHandler:
         admin_notifier: AdminNotifier,
         user_notifier: UserNotifier,
         backend_api_url: str,
+        settings_service=None,
     ):
         """
         Initialize the admin message handler.
@@ -50,6 +51,7 @@ class AdminMessageHandler:
             admin_notifier: Service for sending admin notifications
             user_notifier: Service for sending user notifications
             backend_api_url: Backend API URL for fetching order details
+            settings_service: Settings service for accessing bank data (optional)
         """
         self.bot = bot
         self.admin_group_id = admin_group_id
@@ -60,6 +62,7 @@ class AdminMessageHandler:
         self.admin_notifier = admin_notifier
         self.user_notifier = user_notifier
         self.backend_api_url = backend_api_url.rstrip("/")
+        self.settings_service = settings_service
         logger.info("AdminMessageHandler initialized")
 
     async def handle_message(
@@ -1065,24 +1068,16 @@ If you cannot find a transfer amount, return:
             Bank ID or None if not found
         """
         try:
-            from app.services.settings_service import SettingsService
-            from app.config import get_settings
-            
-            # Get settings service to access bank lists
-            settings = get_settings()
-            settings_service = SettingsService(
-                backend_api_url=settings.backend_api_url,
-                backend_api_key=settings.backend_api_key
-            )
-            
-            # Fetch latest bank data
-            await settings_service.fetch_settings()
+            # Check if settings_service is available
+            if not self.settings_service:
+                logger.warning("Settings service not available, cannot find bank ID")
+                return None
             
             # Determine which bank list to search
             if currency == "THB":
-                banks = settings_service.thai_banks
+                banks = self.settings_service.thai_banks
             else:  # MMK
-                banks = settings_service.myanmar_banks
+                banks = self.settings_service.myanmar_banks
             
             # Search for bank by display_name or bank_name
             display_name_upper = display_name.upper()
