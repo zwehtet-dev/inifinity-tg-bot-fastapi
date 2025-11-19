@@ -62,6 +62,8 @@ class BankAccount(BaseModel):
     account_number: str = Field(..., description="Expected account number")
     account_name: str = Field(..., description="Expected account holder name")
     qr_image: Optional[str] = Field(None, description="QR code image URL or path")
+    display_name: Optional[str] = Field(None, description="Display name for the bank")
+    id: Optional[int] = Field(None, description="Bank account ID")
 
     class Config:
         """Pydantic configuration."""
@@ -72,5 +74,7 @@ class BankAccount(BaseModel):
                 "account_number": "1234567890",
                 "account_name": "John Doe",
                 "qr_image": "/static/qr/kasikorn.jpg",
+                "display_name": "MMN (Kbank)",
+                "id": 1,
             }
         }

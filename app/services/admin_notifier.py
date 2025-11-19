@@ -226,16 +226,16 @@ class AdminNotifier:
 
         Format:
         MMK
-        MMN - 2000000 Khin Oo - 0
+        CSTZ (AYA W) - 16,000,000.00
+        CSTZ (AYA) - 12,582,879.00
         THB
-        MMN - 40265
-        PPK - 31108
-        NDT - 3805
+        TZH (Kbank) - 15,000.00
+        MMN (SCB) - 46,761.82
 
         Args:
             myanmar_banks: List of Myanmar bank accounts
             thai_banks: List of Thai bank accounts
-            balances: Optional dict mapping bank names to current balances
+            balances: Optional dict mapping bank names/IDs to current balances
 
         Returns:
             True if notification sent successfully, False otherwise
@@ -256,6 +256,7 @@ class AdminNotifier:
                             "bank_name", "Unknown"
                         )
                         bank_name = bank.get("bank_name", "")
+                        bank_id = bank.get("id")
                     else:
                         display = (
                             bank.display_name
@@ -263,10 +264,17 @@ class AdminNotifier:
                             else bank.bank_name
                         )
                         bank_name = bank.bank_name
+                        bank_id = bank.id if hasattr(bank, "id") else None
 
-                    balance = balances.get(bank_name, 0.0) if balances else 0.0
-                    # Format: DisplayName - Balance
-                    message += f"{display} - {balance:,.0f}\n"
+                    # Try to get balance by bank_name first, then by id
+                    balance = 0.0
+                    if balances:
+                        balance = balances.get(bank_name, 0.0)
+                        if balance == 0.0 and bank_id:
+                            balance = balances.get(str(bank_id), 0.0)
+                    
+                    # Format: DisplayName - Balance with 2 decimal places
+                    message += f"{display} - {balance:,.2f}\n"
             else:
                 message += "No Myanmar banks configured\n"
 
@@ -280,6 +288,7 @@ class AdminNotifier:
                             "bank_name", "Unknown"
                         )
                         bank_name = bank.get("bank_name", "")
+                        bank_id = bank.get("id")
                     else:
                         display = (
                             bank.display_name
@@ -287,10 +296,17 @@ class AdminNotifier:
                             else bank.bank_name
                         )
                         bank_name = bank.bank_name
+                        bank_id = bank.id if hasattr(bank, "id") else None
 
-                    balance = balances.get(bank_name, 0.0) if balances else 0.0
-                    # Format: DisplayName - Balance
-                    message += f"{display} - {balance:,.0f}\n"
+                    # Try to get balance by bank_name first, then by id
+                    balance = 0.0
+                    if balances:
+                        balance = balances.get(bank_name, 0.0)
+                        if balance == 0.0 and bank_id:
+                            balance = balances.get(str(bank_id), 0.0)
+                    
+                    # Format: DisplayName - Balance with 2 decimal places
+                    message += f"{display} - {balance:,.2f}\n"
             else:
                 message += "No Thai banks configured\n"
 
