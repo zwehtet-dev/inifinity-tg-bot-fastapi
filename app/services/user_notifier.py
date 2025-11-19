@@ -87,7 +87,7 @@ class UserNotifier:
             )
 
             logger.info(
-                f"📤 Sending success message to user {user_id}",
+                f"📤 Sending success notification to user {user_id}",
                 extra={
                     "user_id": user_id,
                     "chat_id": chat_id,
@@ -97,39 +97,46 @@ class UserNotifier:
                 },
             )
 
-            # Send success message
-            try:
-                await self.bot.send_message(chat_id=chat_id, text=message)
-                logger.info(f"✅ Success message sent to user {user_id}")
-            except Exception as msg_error:
-                logger.error(
-                    f"❌ Failed to send success message: {msg_error}", exc_info=True
-                )
-                raise
-
-            # Send admin receipt if available and valid
+            # Send admin receipt with calculation as caption (single message)
             if admin_receipt_file_id and admin_receipt_file_id.strip():
                 try:
-                    logger.info(f"📸 Sending admin receipt to user {user_id}")
+                    logger.info(f"📸 Sending admin receipt with calculation to user {user_id}")
                     await self.bot.send_photo(
                         chat_id=chat_id,
                         photo=admin_receipt_file_id,
-                        caption="Admin Confirmation Receipt",
+                        caption=message,  # Calculation as caption
                     )
                     logger.info(
-                        f"✅ Sent admin receipt to user {user_id}",
+                        f"✅ Sent admin receipt with calculation to user {user_id}",
                         extra={"user_id": user_id, "order_id": order_id},
                     )
                 except Exception as receipt_error:
-                    logger.warning(
-                        f"⚠️ Failed to send admin receipt: {receipt_error}",
+                    logger.error(
+                        f"❌ Failed to send admin receipt: {receipt_error}",
                         extra={
                             "user_id": user_id,
                             "order_id": order_id,
                             "receipt_file_id": admin_receipt_file_id,
                         },
+                        exc_info=True,
                     )
-                    # Continue without receipt - success message was already sent
+                    # Fallback: send as text message if photo fails
+                    try:
+                        await self.bot.send_message(chat_id=chat_id, text=message)
+                        logger.info(f"✅ Sent calculation as text (fallback) to user {user_id}")
+                    except Exception as text_error:
+                        logger.error(f"❌ Failed to send text message: {text_error}")
+                        raise
+            else:
+                # No receipt - send as text message
+                try:
+                    await self.bot.send_message(chat_id=chat_id, text=message)
+                    logger.info(f"✅ Sent calculation as text to user {user_id}")
+                except Exception as msg_error:
+                    logger.error(
+                        f"❌ Failed to send success message: {msg_error}", exc_info=True
+                    )
+                    raise
 
             # Clear user conversation state
             self.state_manager.clear_state(user_id)

@@ -164,9 +164,8 @@ class AdminMessageHandler:
             topic_id: Topic ID where message was sent
         """
         try:
-            # Send acknowledgment
-            await message.reply_text("⏳ Verifying receipt...")
-
+            # Work silently in background - no acknowledgment message
+            
             # Extract order ID from original message (for reference only)
             order_id = self._extract_order_id_from_message(message.reply_to_message)
             if order_id:
@@ -232,20 +231,14 @@ class AdminMessageHandler:
             amount_diff = abs(staff_sent_amount - expected_amount)
 
             if amount_diff <= tolerance:
-                # Amount matches - proceed with completion
+                # Amount matches - proceed with completion silently
                 logger.info(
                     f"✅ Amount verified: {staff_sent_amount:.2f} ≈ {expected_amount:.2f} "
                     f"(diff: {amount_diff:.2f}, tolerance: {tolerance})"
                 )
 
-                await message.reply_text(
-                    f"✅ Receipt verified!\n"
-                    f"Expected: {expected_amount:,.2f} {expected_currency}\n"
-                    f"Received: {staff_sent_amount:,.2f} {expected_currency}\n"
-                    f"Difference: {amount_diff:,.2f}\n\n"
-                    f"Amount matches! ✓"
-                )
-
+                # No message to admin - work silently in background
+                
                 # If we have order ID, we can update balances and notify user
                 if order_id:
                     # Fetch full order details for bank IDs
@@ -366,19 +359,13 @@ class AdminMessageHandler:
                     )
 
             else:
-                # Amount mismatch
+                # Amount mismatch - only show simple error
                 logger.warning(
                     f"❌ Amount mismatch: {staff_sent_amount:.2f} vs {expected_amount:.2f} "
                     f"(diff: {amount_diff:.2f}, tolerance: {tolerance})"
                 )
 
-                await message.reply_text(
-                    f"❌ Amount mismatch!\n\n"
-                    f"Expected: {expected_amount:,.2f} {expected_currency}\n"
-                    f"Received: {staff_sent_amount:,.2f} {expected_currency}\n"
-                    f"Difference: {amount_diff:,.2f} (tolerance: ±{tolerance})\n\n"
-                    f"Please verify the receipt and try again, or contact admin for manual processing."
-                )
+                await message.reply_text("❌ Amount not match")
 
         except Exception as e:
             logger.error(f"Error processing staff receipt: {e}", exc_info=True)
