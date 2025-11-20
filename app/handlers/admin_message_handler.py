@@ -264,6 +264,31 @@ class AdminMessageHandler:
                     order_details = await self._fetch_order_details(order_id)
 
                     if order_details:
+                        # Check order status first - only process if pending
+                        order_status = order_details.get("status", "").lower()
+                        
+                        if order_status != "pending":
+                            # Order already processed - show status message
+                            status_messages = {
+                                "approved": "✅ Order already approved",
+                                "rejected": "❌ Order already declined",
+                                "declined": "❌ Order already declined",
+                                "completed": "✅ Order already completed",
+                                "cancelled": "❌ Order cancelled",
+                                "complain": "⚠️ Order has complaint"
+                            }
+                            
+                            status_msg = status_messages.get(order_status, f"⚠️ Order status: {order_status}")
+                            
+                            logger.info(
+                                f"Order {order_id} is not pending (status: {order_status}), skipping processing",
+                                extra={"order_id": order_id, "status": order_status}
+                            )
+                            
+                            await message.reply_text(status_msg)
+                            return
+                        
+                        # Order is pending - proceed with processing
                         thai_bank_id = order_details.get("thai_bank_account_id")
                         myanmar_bank_id = order_details.get("myanmar_bank_account_id")
                         chat_id = order_details.get("telegram", {}).get("chat_id")
@@ -276,7 +301,8 @@ class AdminMessageHandler:
                                 "order_id": order_id,
                                 "thai_bank_id": thai_bank_id,
                                 "myanmar_bank_id": myanmar_bank_id,
-                                "order_type": order_type
+                                "order_type": order_type,
+                                "status": order_status
                             }
                         )
                         
