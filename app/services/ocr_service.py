@@ -309,11 +309,24 @@ Check if the image contains:
 
 **Extract the following from the receipt:**
 - Transfer amount (numeric value only, no currency symbols or commas)
+  * Look for the MAIN AMOUNT displayed prominently (often the largest number)
+  * Common formats: "398,500.00", "-398,500.00", "398500", "398,500.00 Ks", "398,500.00 THB"
+  * Remove ALL: minus signs (-), commas (,), currency symbols (Ks, THB, ฿, K, MMK)
+  * Extract ONLY the numeric value (e.g., 398500.00 or 398500)
+  * Look near labels like: "Amount", "จำนวนเงิน", "ยอดเงิน", or prominently displayed
 - Receiver Bank name (the bank receiving the money - use full name or common abbreviation)
 - Receiver Account number (recipient's account number, may have some digits hidden with *)
 - Receiver Account holder name (recipient's name as shown on receipt)
 - Transaction date (if visible, format: YYYY-MM-DD or as shown)
 - Transaction ID or reference number (if visible)
+
+**CRITICAL AMOUNT EXTRACTION RULES:**
+1. Find the LARGEST or MOST PROMINENT number on the receipt
+2. This is usually displayed at the TOP or CENTER of the receipt
+3. Ignore minus signs (-) - they just indicate debit/outgoing
+4. Remove commas and currency symbols
+5. Common locations: near "Payment Successful", "Amount", "Total", or displayed prominently
+6. Example: "-398,500.00 (Ks)" → extract as 398500.00
 
 **CRITICAL: Extract RECEIVER/RECIPIENT information, NOT sender information!**
 
@@ -359,8 +372,13 @@ Check if the image contains:
 - Calculate confidence_score using the weighted scoring system above
 - Account number matching is MOST important (50% weight)
 - If the receipt does NOT match any admin account well, confidence will be low
-- For amount, extract only the numeric value (e.g., 1000.50, not "1,000.50 THB")
-- Look for keywords indicating success: "สำเร็จ", "Success", "Completed", "Complete"
+- **AMOUNT EXTRACTION IS CRITICAL:**
+  * Find the MAIN/PROMINENT amount displayed (usually largest text)
+  * Remove ALL formatting: minus signs, commas, currency symbols
+  * Examples: "-398,500.00 (Ks)" → 398500.00, "1,000.50 THB" → 1000.50
+  * Look at the TOP/CENTER of receipt for the main amount
+  * Ignore smaller amounts like fees or commissions
+- Look for keywords indicating success: "สำเร็จ", "Success", "Completed", "Complete", "Payment Successful"
 
 Return the extracted data in valid JSON format matching the ReceiptData schema."""
 
