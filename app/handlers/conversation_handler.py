@@ -233,9 +233,11 @@ class ConversationHandler:
                 },
             )
 
-        # Calculate reverse rates for display
-        buy_reverse_rate = 1 / buy_mmk_rate if buy_mmk_rate > 0 else 0
-        sell_reverse_rate = 1 / sell_mmk_rate if sell_mmk_rate > 0 else 0
+        # Calculate THB amount for 100,000 MMK for display
+        # Buy: User pays THB to get MMK, so show THB needed for 100k MMK
+        buy_thb_for_100k_mmk = 100000 / buy_mmk_rate if buy_mmk_rate > 0 else 0
+        # Sell: User pays MMK to get THB, so show THB received for 100k MMK
+        sell_thb_for_100k_mmk = 100000 / sell_mmk_rate if sell_mmk_rate > 0 else 0
 
         welcome_text = (
             "🙏 မင်္ဂလာပါ \n"
@@ -247,13 +249,13 @@ class ConversationHandler:
         keyboard = [
             [
                 InlineKeyboardButton(
-                    f"Buy: {buy_mmk_rate:.2f} ({buy_reverse_rate:.2f}) | ဘတ်ပေးကျပ်ယူ",
+                    f"Buy: {buy_mmk_rate:.2f} ({buy_thb_for_100k_mmk:.2f}) | ဘတ်ပေးကျပ်ယူ",
                     callback_data="action_buy",
                 )
             ],
             [
                 InlineKeyboardButton(
-                    f"Sell: {sell_mmk_rate:.2f} ({sell_reverse_rate:.2f}) | ကျပ်ပေးဘတ်ယူ",
+                    f"Sell: {sell_mmk_rate:.2f} ({sell_thb_for_100k_mmk:.2f}) | ကျပ်ပေးဘတ်ယူ",
                     callback_data="action_sell",
                 )
             ],
@@ -271,8 +273,8 @@ class ConversationHandler:
             if state:
                 telegram_id = str(state.user_id)
                 buttons = {
-                    "action_buy": f"Buy: {buy_mmk_rate:.2f} ({buy_reverse_rate:.2f}) | ဘတ်ပေးကျပ်ယူ",
-                    "action_sell": f"Sell: {sell_mmk_rate:.2f} ({sell_reverse_rate:.2f}) | ကျပ်ပေးဘတ်ယူ",
+                    "action_buy": f"Buy: {buy_mmk_rate:.2f} ({buy_thb_for_100k_mmk:.2f}) | ဘတ်ပေးကျပ်ယူ",
+                    "action_sell": f"Sell: {sell_mmk_rate:.2f} ({sell_thb_for_100k_mmk:.2f}) | ကျပ်ပေးဘတ်ယူ",
                 }
                 await self.message_service.submit_bot_message(
                     telegram_id=telegram_id,
