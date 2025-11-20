@@ -38,6 +38,15 @@ ENV/
 # Logs
 *.log
 logs/
+app/logs/
+
+# Testing
+.pytest_cache/
+.coverage
+coverage.xml
+htmlcov/
+.tox/
+.hypothesis/
 
 # OS
 .DS_Store
@@ -46,5 +55,6 @@ Thumbs.db
 # Ignore all markdown files
 *.md
 
-# Except README.md
+# Except README.md and tests README
 !README.md
+!tests/README.md
