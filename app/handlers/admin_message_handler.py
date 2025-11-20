@@ -612,43 +612,81 @@ class AdminMessageHandler:
             image_data_url = f"data:image/jpeg;base64,{image_base64}"
 
             # Simplified prompt for staff receipts - only extract amount
-            prompt = """You are analyzing a bank transfer receipt from staff to a customer.
+            prompt = """You are analyzing a bank transfer receipt. Your ONLY task is to find and extract the MAIN TRANSFER AMOUNT.
 
-**Your task: Extract ONLY the transfer amount from this receipt.**
+**STEP 1: Find the MAIN AMOUNT**
+Look for the LARGEST, most PROMINENT number on the receipt. This is usually:
+- Displayed at the TOP or CENTER of the screen
+- The biggest text/number
+- Near words like: "Payment Successful", "Transfer Complete", "โอนเงินสำเร็จ", "ငွေလွှဲပြီးပါပြီ"
 
-Look for:
-- The main transfer/payment amount (usually the largest number)
-- Keywords: "Amount", "จำนวนเงิน", "Total", "ยอดโอน", "Transfer Amount"
-- Ignore: fees, balance, previous transactions
+**STEP 2: Extract the NUMBER**
+Remove ALL formatting and extract ONLY the numeric value:
+
+**Myanmar Format Examples:**
+- "-398,500.00 (Ks)" → Extract: 398500.00
+- "-398,500.00 Ks" → Extract: 398500.00
+- "398,500 MMK" → Extract: 398500
+- "398500 K" → Extract: 398500
+
+**Thai Format Examples:**
+- "1,234.56 บาท" → Extract: 1234.56
+- "1,234.56 THB" → Extract: 1234.56
+- "1,234.56 ฿" → Extract: 1234.56
 
 **CRITICAL RULES:**
-1. Extract ONLY the numeric value (no currency symbols, no commas)
-2. This should be the amount SENT/TRANSFERRED (not balance, not fee)
-3. If you cannot find a clear transfer amount, return 0
-4. Common formats: "200,000", "200000", "200,000.00"
+1. Remove MINUS signs (-) - they just mean "outgoing"
+2. Remove COMMAS (,)
+3. Remove ALL currency symbols: Ks, K, MMK, THB, ฿, บาท, ကျပ်
+4. Keep ONLY the number (with decimal point if present)
+5. Look for the MAIN amount, NOT fees or commissions
 
-**Examples:**
-- Receipt shows "จำนวนเงิน 200,000 บาท" → Return: 200000
-- Receipt shows "Transfer Amount: 125,780 MMK" → Return: 125780
-- Receipt shows "Amount: 1,500.00" → Return: 1500
+**Common Receipt Layouts:**
 
-Return the data in this exact JSON format:
+Myanmar KBZ Bank:
+```
+Payment Successful
+-398,500.00 (Ks)  ← THIS IS THE MAIN AMOUNT
+Transaction No: 0100397607145683791
+Amount: -398,500.00 Ks  ← Same amount repeated
+Commission: 0.00 Ks  ← IGNORE this
+```
+Extract: 398500.00
+
+Thai Banking:
+```
+โอนเงินสำเร็จ
+1,234.56 บาท  ← THIS IS THE MAIN AMOUNT
+เลขที่บัญชี: XXX-X-XXXXX-X
+```
+Extract: 1234.56
+
+**What to IGNORE:**
+- Commission/Fee amounts (usually 0.00 or small)
+- Account numbers
+- Transaction IDs
+- Dates and times
+- Balance amounts
+
+**If you find the amount, return:**
 {
-    "amount": <numeric_value>,
+    "amount": <the_numeric_value>,
     "bank_name": "STAFF_RECEIPT",
     "account_number": "N/A",
     "account_name": "N/A",
     "confidence_score": 1.0
 }
 
-If you cannot find a transfer amount, return:
+**If you CANNOT find a clear amount, return:**
 {
     "amount": 0,
     "bank_name": "UNCLEAR",
     "account_number": "N/A",
     "account_name": "N/A",
     "confidence_score": 0.0
-}"""
+}
+
+Remember: Find the BIGGEST, most PROMINENT number near "Payment Successful" or similar success message!"""
 
             # Initialize LLM with structured output
             from app.models.receipt import ReceiptData
@@ -680,11 +718,26 @@ If you cannot find a transfer amount, return:
 
             result = await asyncio.wait_for(llm.ainvoke([message]), timeout=30)
 
+            # Log the full result for debugging
+            logger.info("=" * 80)
+            logger.info("OCR RESULT FROM STAFF RECEIPT")
+            logger.info("=" * 80)
+            if result:
+                logger.info(f"Amount: {result.amount}")
+                logger.info(f"Bank Name: {result.bank_name}")
+                logger.info(f"Confidence: {result.confidence_score}")
+            else:
+                logger.warning("Result is None")
+            logger.info("=" * 80)
+
             if result and result.amount > 0:
                 logger.info(f"✅ Extracted amount from staff receipt: {result.amount}")
                 return result
             else:
-                logger.warning("❌ Could not extract valid amount from staff receipt")
+                logger.warning(
+                    f"❌ Could not extract valid amount from staff receipt. "
+                    f"Amount: {result.amount if result else 'None'}"
+                )
                 return None
 
         except Exception as e:
